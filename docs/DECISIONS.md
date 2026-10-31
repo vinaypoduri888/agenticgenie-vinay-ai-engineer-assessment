@@ -324,4 +324,78 @@ Important architecture/implementation decisions, in plain language, for intervie
 - **Trade-off:** none — this is pure, stateless logic; wiring it into a real route later is
   mechanical.
 
+### D-017: Event visibility split — catalogue search vs. direct GET by id
+
+- **Decision:** `GET /events` (search/catalogue) only returns `PUBLISHED`, `ON_SALE`, `SOLD_OUT`
+  events. `GET /events/:id` (direct lookup) additionally resolves `CANCELLED` and `COMPLETED`
+  events; only `DRAFT` is hidden from both. Organiser members see every status via the separate
+  `GET /organisers/:organiserId/events/:eventId`.
+- **Why we chose it:** the PDF doesn't define this split explicitly ("list published events"). A
+  cancelled or completed show cluttering "comedy in Pune this weekend" search results would be
+  noise, but hiding it entirely from direct access would break legitimate uses — viewing why an
+  event got cancelled, or browsing reviews for a completed one (reviews require completed events).
+- **Trade-off:** a documented assumption, easy to change if the PDF's intent was narrower.
+
+### D-018: Publish validates "has sellable inventory," not more
+
+- **Decision:** `POST .../events/:eventId/publish` (DRAFT→PUBLISHED) requires at least one
+  `TicketTier` or one generated `EventSeat` to exist; otherwise 422. All other event fields are
+  already non-nullable at creation, so there's nothing else to validate for readiness.
+- **Why we chose it:** publishing an event nobody can buy anything for is a real, testable footgun
+  worth blocking; it's also the natural seam for whatever "required information" later stages decide
+  to add (e.g. a minimum lead time before `startsAt`) without redesigning the publish flow.
+- **Scope note:** only DRAFT→PUBLISHED is exposed over HTTP this stage. The full transition table
+  (`PUBLISHED→ON_SALE→SOLD_OUT`, cancellation from various states, etc.) is defined in
+  `statusTransitions.ts` and unit-tested, so later stages (going on sale, selling out, cancellation)
+  call an already-correct rule instead of re-deriving one — same pattern as `canRefundOrder` in
+  Stage 2.1.
+
+### D-019: Event cancellation is not exposed this stage — by explicit instruction
+
+- **Decision:** no `/cancel` endpoint exists yet, even for a `DRAFT` event with no orders.
+- **Why we chose it:** cancelling an event with paid orders must resolve active holds and refund
+  every paid order exactly once (see the Stage-2-schema-review transaction design in this file's
+  earlier entries) — none of that machinery exists yet (no holds, no orders). Exposing cancellation
+  now, even restricted to a currently-harmless case, would be a partial implementation of a
+  correctness-critical flow; better to build it once, completely, alongside holds/orders/refunds.
+
+### D-020: Overall seat-availability summary now; per-section breakdown deferred
+
+- **Decision:** event detail includes `seatAvailability: { total, available, held, sold }` (one
+  `groupBy` query) and, for GA, each tier's `remainingQuantity` directly. It does **not** include a
+  per-section breakdown of seat status.
+- **Why we chose it:** a true per-section breakdown needs a join across `EventSeat → Seat → Row →
+  Section` that Prisma's `groupBy` can't express directly (would need raw SQL). The PDF's explicit,
+  testable acceptance criteria don't require this granularity — it's a UI nicety, not a correctness
+  requirement — so it's deferred rather than reached for now.
+- **Trade-off:** a seated event's detail response is slightly less informative than it could be;
+  easy to add later as a `$queryRaw` without touching anything else.
+
+### D-021: Query validation needs `req.validatedQuery`, not a `req.query` reassignment
+
+- **Decision:** `validateQuery` middleware stores the parsed/coerced query on `req.validatedQuery`
+  (a new field), rather than reassigning `req.query` the way `validateBody`/`validateParams` do.
+- **Why we chose it:** discovered (and verified with a small standalone script before relying on it)
+  that Express 5 made `req.query` a read-only getter — assigning to it silently no-ops instead of
+  throwing, which would have made query validation appear to work while actually doing nothing.
+  `req.body` and `req.params` remain assignable. Documented here so nobody "fixes" this back to a
+  `req.query =` assignment later and reintroduces a silent bug.
+
+### D-022: Test fixture cleanup scoped by organiser id, not per-row tracking
+
+- **Decision:** `test/helpers/fixtures.ts` tracks only the organiser and user ids a test created,
+  and `resetFixtures()` deletes every `Event`/`Venue`/`OrganiserMembership` scoped to those
+  organiser ids (in that order, before deleting the organisers themselves), rather than tracking
+  individual venue/event/section/row/seat ids.
+- **Why we chose it:** found during this stage — tests exercise the real HTTP endpoints (`POST
+  /organisers/:id/events`, etc.), which create rows the fixtures module never directly constructed
+  and so had no id to track. The first test run failed with 20 foreign-key-constraint errors because
+  cleanup only knew about fixture-helper-created rows, not API-created ones, and tried to delete a
+  venue that an untracked, API-created event still referenced. Scoping cleanup by organiser id
+  instead catches every descendant regardless of which code path created it — and this pattern will
+  keep working as later stages add holds/orders/tickets/reviews/audit rows, none of which need their
+  own tracking arrays either.
+- **Trade-off:** cleanup runs a few more `deleteMany` queries per test than strictly necessary when
+  nothing was created under a given organiser — negligible at this scale.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

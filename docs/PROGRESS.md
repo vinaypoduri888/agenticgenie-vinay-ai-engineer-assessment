@@ -205,4 +205,93 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 
 ---
 
+## Stage 2.2 — Venues, events, and inventory management (2026-10-31)
+
+- **Task:** Organiser-scoped venue CRUD + seat-map hierarchy (Section→Row→Seat), event
+  create/update/publish with validated status transitions, GA ticket tiers, one-time EventSeat
+  bulk-generation, and the public event catalogue (filters + keyset pagination). No holds, orders,
+  payments, tickets, refunds, or event cancellation — explicitly deferred.
+- **Status:** Implemented and tested (automated). No database schema changes were needed.
+- **Files changed:**
+  - `apps/api/src/lib/{actionContext,audit,prismaErrors,pagination}.ts` — new shared infra: the
+    `{actorUserId, organiserId, requestId}` context every mutation needs, the one audit-write
+    helper (not a framework), Prisma unique-constraint → 409 mapping, and the `(createdAt, id)`
+    cursor encode/decode.
+  - `apps/api/src/modules/venues/{schemas,service,router}.ts` — venue CRUD, Section/Row/Seat
+    creation, organiser-ownership checks at every nesting level.
+  - `apps/api/src/modules/events/{schemas,statusTransitions,service,router,publicRouter}.ts` —
+    event create/update/publish, the full (if partially unexposed) status-transition table, and the
+    public catalogue + detail endpoints.
+  - `apps/api/src/modules/inventory/{schemas,service}.ts` — GA ticket tier creation, EventSeat
+    bulk-generation from priced venue sections.
+  - `apps/api/src/middleware/validate.ts`, `apps/api/src/types/express.d.ts` — added `validateQuery`
+    / `req.validatedQuery` (see D-021 — `req.query` turned out to be a read-only getter in Express 5,
+    unlike `req.body`/`req.params`).
+  - `apps/api/src/app.ts` — mounted `/events` (public), `/organisers/:organiserId/venues` and
+    `/organisers/:organiserId/events` (both behind `requireAuth`, reusing Stage 2.1's middleware
+    unchanged).
+  - `apps/api/src/openapi.ts` — documented the new endpoints (summary-level).
+  - `apps/api/test/helpers/fixtures.ts` — extended with venue/section/row/seat/event/tier builders;
+    cleanup strategy changed to organiser-id-scoped deletion (see D-022 — a real bug caught and
+    fixed during this stage).
+  - `apps/api/test/venues/venues.test.ts`, `apps/api/test/events/{events,catalogue}.test.ts`,
+    `apps/api/test/inventory/inventory.test.ts` — see below.
+  - `docs/ASSESSMENT_REQUIREMENTS.md` (D3, D4, D8, W2, W3, W4, E2, E3, E10, A7 updated),
+    `docs/DECISIONS.md` (D-017–D-022).
+- **Tests added (72 passing total, 11 files — 38 new this stage):**
+  - Venues: admin creates a venue for their own organiser; audit entry written in the same
+    transaction; staff forbidden (403); list scoped to the caller's own organiser only; 404 (not
+    403) fetching another organiser's venue; update records accurate before/after audit state.
+  - Seat map: section→row→seat creation returns the full nested structure on venue detail;
+    duplicate section name → 409; duplicate seat label within a row → 409; a row whose
+    `sectionId` doesn't match the URL's section → 404.
+  - Events: creates as DRAFT with an audit entry; creating against another organiser's venue → 404
+    (composite FK + service-layer check); staff forbidden; another organiser's event → 404; update
+    while DRAFT succeeds, while COMPLETED → 409; publish with no inventory → 422; publish with a
+    tier → 200 with before/after audit state; publishing an already-published or CANCELLED event →
+    409 `INVALID_STATUS_TRANSITION`.
+  - Inventory: tier creation seeds `remainingQuantity` from `totalQuantity`; invalid
+    price/quantity → 400 at the validation layer; **the DB itself** rejects
+    `remaining_quantity` outside `[0, total]` even bypassing the API (direct Prisma call); duplicate
+    tier name → 409. EventSeat generation creates exactly one row per physical seat at the
+    configured price; regenerating → 409; **the DB itself** rejects a duplicate
+    `(eventId, seatId)` even bypassing the service layer; a section from a different venue → 404.
+  - Catalogue: DRAFT hidden from both search and direct GET; PUBLISHED visible in search; direct
+    GET resolves CANCELLED but not DRAFT; city/category/date-range/text filters, including a test
+    that specifically exercises combining text search with another filter (the bug described
+    below); cursor pagination proven stable across a concurrent insert made *between* two page
+    fetches (no duplicate ids across pages, the insert and a previously-seeded row are both still
+    reachable); malformed cursor → 400; oversized page size → 400.
+- **Two real bugs caught and fixed while writing this stage (not left for later):**
+  1. **Query-builder bug:** the first draft of the catalogue filter built `where` by object-spreading
+     a `{...where, OR: [...]}` to add the cursor condition — but the text-search filter (`q`) also
+     produces an `OR` key, so combining the two via spread would silently let the second `OR`
+     overwrite the first, dropping the text-search condition whenever both were used together.
+     Fixed by building the whole filter as an `AND` array of independent conditions before writing
+     any tests — caught by reasoning about the code, then confirmed by the "text search combined
+     with city filter" test.
+  2. **Test-cleanup bug:** the first test run failed with 20 foreign-key-constraint violations.
+     Root cause and fix recorded in docs/DECISIONS.md D-022 — fixture cleanup only tracked rows
+     created directly through fixture helpers, not through the real HTTP endpoints under test.
+- **Verification actually run:**
+  - `npm run typecheck` → 0 errors, all 4 workspaces.
+  - `npm run test` → 72/72 passing, run 5 times total (across both bug-fix iterations) to confirm
+    no flakiness once fixed.
+  - `prisma migrate status` → still "up to date," 2 migrations — confirmed no schema drift.
+  - `psql` row counts confirmed the database returns to exactly empty after a full test run; also
+    found and manually cleared ~26 orphaned organisers/venues/events/audit-logs left behind by the
+    *failed* runs during debugging (before the cleanup fix) — confirmed via a repeat run that counts
+    were static, not growing, before clearing them, so the leftover was debugging debris, not an
+    ongoing leak.
+- **Commit hash:** _pending — see next update._
+- **Remaining issues / scope notes:** Event cancellation is deliberately not implemented (see D-019
+  — needs holds/orders to resolve correctly, which don't exist yet). `PUBLISHED→ON_SALE→SOLD_OUT`
+  transitions aren't exposed over HTTP yet (the rule exists and is tested; no endpoint calls it
+  yet — tied to when holds/purchases start depleting inventory). Per-section seat availability
+  breakdown deferred (D-020) in favour of an overall summary. No "list organiser's own events"
+  endpoint was built (not explicitly requested; organiser event access goes through the per-event
+  detail route for now).
+
+---
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->

@@ -17,3 +17,13 @@ export function validateParams(schema: ZodType) {
     next();
   };
 }
+
+/** Express 5 makes req.query a read-only getter (reassigning it silently
+ * no-ops), unlike req.body/req.params — so the parsed/coerced query goes on
+ * req.validatedQuery instead of trying to overwrite req.query. */
+export function validateQuery(schema: ZodType) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    req.validatedQuery = schema.parse(req.query);
+    next();
+  };
+}

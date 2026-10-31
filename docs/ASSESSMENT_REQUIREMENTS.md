@@ -16,12 +16,12 @@ existing is not enough.
 |---|---|---|---|
 | D1 | Organiser | isolated account | Not started |
 | D2 | User | role attendee (platform-wide) or org membership staff/admin | Tested — `packages/db/prisma/schema.prisma` (User, OrganiserMembership); `apps/api/src/middleware/requireAuth.ts`, `requireOrganiser.ts` |
-| D3 | Venue / seat map | sections → rows → seats, and/or GA capacity | Not started |
-| D4 | Event | status: draft→published→on_sale→sold_out\|cancelled\|completed | Not started |
+| D3 | Venue / seat map | sections → rows → seats, and/or GA capacity | Tested — `apps/api/src/modules/venues/` |
+| D4 | Event | status: draft→published→on_sale→sold_out\|cancelled\|completed | Tested (DRAFT→PUBLISHED only; remaining transitions defined but not yet exposed — see `statusTransitions.ts`) |
 | D5 | Hold | temp reservation, expires after N minutes (default 10, configurable) | Not started |
 | D6 | Order / Ticket | order: pending_payment→paid→partially_refunded\|refunded; ticket: unique code + check-in state | Not started |
 | D7 | Review | free-text, attendee, completed events, untrusted content (Part B) | Not started |
-| D8 | Audit log | append-only, actor/action/timestamp/before-after/request_id | Not started |
+| D8 | Audit log | append-only, actor/action/timestamp/before-after/request_id | In progress — venue/event/inventory mutations audited (`apps/api/src/lib/audit.ts`); holds/orders/refunds/check-in land with those stages |
 | D9 | Idempotency record | per-user, per-key, request hash | Not started |
 
 ### Required workflows
@@ -29,9 +29,9 @@ existing is not enough.
 | # | Workflow | Status |
 |---|---|---|
 | W1 | Auth / login | Tested — `apps/api/src/modules/auth/` + `apps/api/test/auth/register-login.test.ts` |
-| W2 | Event create/publish/update/cancel | Not started |
-| W3 | Public catalogue + search | Not started |
-| W4 | Event detail + live availability | Not started |
+| W2 | Event create/publish/update/cancel | In progress — create/update/publish done; cancel deliberately deferred to the refund/cancellation stage (needs to resolve active holds and refund paid orders atomically — see docs/DECISIONS.md) |
+| W3 | Public catalogue + search | Tested — city/date-range/category/text filters, keyset pagination |
+| W4 | Event detail + live availability | Tested — ticket-tier remaining counts + overall seat availability summary (per-section breakdown deferred, see docs/DECISIONS.md) |
 | W5 | Seat/GA holds | Not started |
 | W6 | Hold expiry + inventory release | Not started |
 | W7 | Checkout via fake payment provider (succeed/decline/timeout configurable) | Not started |
@@ -48,15 +48,15 @@ existing is not enough.
 | # | Endpoint | Status |
 |---|---|---|
 | E1 | `POST /auth/login` | Tested — `apps/api/src/modules/auth/router.ts` (plus `POST /auth/register`, an extension beyond the PDF's minimum) |
-| E2 | `GET /events?city=&from=&to=&category=&q=&limit=20&cursor=` | Not started |
-| E3 | `GET /events/:id` | Not started |
+| E2 | `GET /events?city=&from=&to=&category=&q=&limit=20&cursor=` | Tested |
+| E3 | `GET /events/:id` | Tested |
 | E4 | `POST /holds` `{event_id, seat_ids[] \| tier_id+qty}` → 201/409 | Not started |
 | E5 | `DELETE /holds/:id` | Not started |
 | E6 | `POST /orders` `[Idem-Key]` `{hold_id}` → 201 paid / 402 declined / 409 expired | Not started |
 | E7 | `GET /me/orders?cursor=` | Not started |
 | E8 | `POST /orders/:id/refund` `[Idem-Key]` `{ticket_ids[]?, reason}` → 200/403/404/409 | Not started |
 | E9 | `POST /tickets/:code/checkin` → 200/409/404 | Not started |
-| E10 | `POST /events` · `PATCH /events/:id` · `POST /events/:id/cancel` (org admin) | Not started |
+| E10 | `POST /events` · `PATCH /events/:id` · `POST /events/:id/cancel` (org admin) | In progress — create/update/publish implemented under `/organisers/:organiserId/events`; cancel deliberately deferred (see W2) |
 | E11 | `GET /events/:id/reviews?cursor=` (public) | Not started |
 | E12 | `GET /organisers/:id/reports/sales?from=&to=&group_by=event\|day\|tier` | Not started |
 | E13 | `GET /audit?entity=&cursor=` (scoped by role) | Not started |
@@ -88,7 +88,7 @@ Error shape: `{"error": {"code": "...", "message": "...", "request_id": "..."}}`
 | A4 | Idempotency: replayed order/refund → no double charge/refund | Automated test | Not started |
 | A5 | All role rules enforced server-side | Tests + curl | Not started |
 | A6 | Isolation: organiser↔organiser, attendee↔attendee across list/get/refund/report/audit | Automated tests | Not started |
-| A7 | Cursor pagination stable under concurrent inserts | Automated test | Not started |
+| A7 | Cursor pagination stable under concurrent inserts | Automated test | Tested — `apps/api/test/events/catalogue.test.ts` (event catalogue only so far; `/me/orders`, reviews, and audit pagination reuse the same cursor helper once those endpoints exist) |
 | A8 | Every state change produces an audit entry with actor + request id | Tests + UI | Not started |
 
 Common traps to avoid (from PDF): UI-only permission checks; SELECT-then-UPDATE races; counting

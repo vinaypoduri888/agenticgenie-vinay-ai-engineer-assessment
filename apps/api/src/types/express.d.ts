@@ -7,6 +7,9 @@ declare global {
     interface Request {
       /** Set by requestId middleware; present on every request. */
       requestId: string;
+      /** Set by validateQuery — see that middleware's comment for why this
+       * isn't just a re-parsed req.query. */
+      validatedQuery?: unknown;
       /**
        * Set by requireAuth once the bearer token's signature, expiry, and
        * subject (an existing user) are all verified. Never derived from a

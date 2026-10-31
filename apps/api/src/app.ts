@@ -5,7 +5,11 @@ import { env } from "./env.js";
 import { openApiDocument } from "./openapi.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestId } from "./middleware/requestId.js";
+import { requireAuth } from "./middleware/requireAuth.js";
 import { authRouter } from "./modules/auth/router.js";
+import { eventsRouter } from "./modules/events/router.js";
+import { publicEventsRouter } from "./modules/events/publicRouter.js";
+import { venuesRouter } from "./modules/venues/router.js";
 import { healthRouter } from "./routes/health.js";
 
 export function createApp() {
@@ -18,6 +22,9 @@ export function createApp() {
   app.use("/docs", swaggerUi.serve, swaggerUi.setup(openApiDocument));
   app.use("/health", healthRouter);
   app.use("/auth", authRouter);
+  app.use("/events", publicEventsRouter);
+  app.use("/organisers/:organiserId/venues", requireAuth, venuesRouter);
+  app.use("/organisers/:organiserId/events", requireAuth, eventsRouter);
 
   // Must be registered last, and keep all 4 params (err, req, res, next) —
   // Express identifies error-handling middleware by that arity.
