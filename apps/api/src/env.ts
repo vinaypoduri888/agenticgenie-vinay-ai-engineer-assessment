@@ -9,6 +9,7 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
   JWT_EXPIRES_IN: z.string().default("12h"),
   BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(4).max(15).default(10),
+  HOLD_EXPIRY_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
 });
 
 export type Env = z.infer<typeof envSchema>;

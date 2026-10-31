@@ -398,4 +398,59 @@ Important architecture/implementation decisions, in plain language, for intervie
 - **Trade-off:** cleanup runs a few more `deleteMany` queries per test than strictly necessary when
   nothing was created under a given organiser — negligible at this scale.
 
+### D-023: Idempotency-Key is required (not just accepted) on holds/orders/refunds
+
+- **Decision:** `POST /holds` (and later `POST /orders`, `POST /orders/:id/refund`) return 400
+  `IDEMPOTENCY_KEY_REQUIRED` if the header is missing, rather than silently proceeding without
+  dedup protection.
+- **Why we chose it:** the PDF says these endpoints "accept" an Idempotency-Key, which could be read
+  as optional. For money/inventory-moving operations, making the protection mandatory is safer and
+  removes an entire class of "client forgot to send it" bugs, at the cost of being slightly stricter
+  than the letter of the spec. Documented here precisely because it's a deliberate strengthening,
+  not an oversight.
+
+### D-024: `withIdempotency` — one-transaction claim, no `lockToken` needed for DB-only operations
+
+- **Decision:** `lib/idempotency.ts`'s `withIdempotency()` wraps the idempotency claim, the business
+  logic, and marking the record `COMPLETED` in **one** transaction. A stale `PROCESSING` row is
+  simply deleted and the claim retried fresh — no ownership-token handoff.
+- **Why this is safe (and why it's *not* the same mechanism designed for payments):** because the
+  claim and the business mutation are the same transaction, a stale `PROCESSING` row provably means
+  that transaction never committed — transaction atomicity guarantees none of its side effects
+  exist. There is nothing to reconcile, so deleting and retrying is fully correct. This is only true
+  because holds/releases/refunds never call an external service mid-transaction. Stage 2.4's payment
+  flow calls an external (simulated) provider between two separate transactions, so a stale record
+  there *might* correspond to a still-in-flight external operation — that path needs the full
+  `lockToken`-preserving takeover protocol designed during schema review, implemented separately in
+  the orders module.
+
+### D-025: Hold expiry — lazy, swept opportunistically, no BullMQ job yet
+
+- **Decision:** no scheduled sweeper process exists. Expiry is enforced two ways: (1) whenever a new
+  hold is requested for an event, that event's expired holds are swept first (so freed inventory is
+  immediately available to the next buyer); (2) whenever a specific hold is loaded for checkout, it's
+  lazily re-checked and expired inline if needed (`getUsableHoldOrThrow`) — so an expired hold can
+  never be purchased regardless of sweep timing. `sweepAllExpiredHolds()` exists and is tested, ready
+  to be attached to a BullMQ repeatable job.
+- **Why we chose it:** the PDF explicitly accepts "lazily on read **or** through a sweeper" — lazy
+  alone is compliant. The two opportunistic sweep points close the realistic gap (inventory sitting
+  idle because nobody happens to revisit that exact hold) without needing queue/worker lifecycle
+  plumbing. Given the remaining scope in this session (orders, tickets, refunds, cancellation,
+  reviews, reports, seed data, full frontend integration), wiring real BullMQ infrastructure now
+  would trade correctness-irrelevant polish for velocity on the pieces that actually gate
+  correctness. Flagged as a known, deliberate simplification, not an oversight.
+- **Idempotent by construction:** `expireHold()` guards its own update with `WHERE status =
+  'ACTIVE'`, so sweeping the same hold twice (concurrent sweeps, or a sweep racing a user's own
+  release) only credits its inventory back once — tested directly (`firstSweep === 1, secondSweep
+  === 0`).
+
+### D-026: Max-8-tickets cap is cumulative (existing valid tickets + this request)
+
+- **Decision:** the per-user-per-event ticket cap counts existing `VALID` tickets from past orders
+  plus the quantity in the hold being requested, not just the current request in isolation.
+- **Why we chose it:** "max 8 tickets per user per event" reads most naturally as a standing limit
+  on total tickets held for that event, not a per-API-call limit that a user could bypass by making
+  several smaller requests. Combined with "one active hold per user per event," this means the
+  cumulative check mostly matters against *already-purchased* tickets from a prior order.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

@@ -294,4 +294,35 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 
 ---
 
+## Stage 2.3 — Holds and concurrency (2026-10-31)
+
+- **Task:** `POST /holds` (seated + GA), `DELETE /holds/:id`, atomic concurrency guarantees, lazy
+  expiry, ticket limits, required idempotency. Part of the larger "Complete Part A" continuous
+  session (Stages 2.3–2.7 + frontend + acceptance, no stop-for-approval between stages per explicit
+  instruction).
+- **Status:** Implemented and tested. No schema changes.
+- **Files:** `apps/api/src/lib/idempotency.ts` (new, shared claim/replay/stale-retry helper for
+  single-transaction operations); `apps/api/src/modules/holds/{schemas,sweeper,service,router}.ts`;
+  `apps/api/src/env.ts` (+`HOLD_EXPIRY_MINUTES`, default 10); `apps/api/src/app.ts` (mounted
+  `/holds` behind `requireAuth`); `apps/api/test/holds/holds.test.ts` (13 tests).
+- **Tests (85 passing total, 13 new):** **50 parallel holds on one seat → exactly 1 succeeds, 49 get
+  409** (acceptance criterion A2, seated case). **200 buyers racing 100 GA tickets → exactly 100
+  succeed, `remainingQuantity` ends at exactly 0, never negative** (A2, GA case) — both run against
+  the real Postgres container with real concurrent HTTP requests, not simulated. Plus: DRAFT events
+  can't be held; one active hold per user/event enforced; >8 tickets in one request rejected at
+  validation; ambiguous seatIds+tierId body rejected; only the owning user can release their hold
+  (404 for a stranger); releasing twice is idempotent (200, no double-credit); a swept expired hold
+  releases inventory exactly once even if swept twice; an expired hold is rejected at checkout-time
+  lazy-check and its inventory is released right there; idempotent replay (same key+body → same
+  hold, inventory decremented once); same key+different body → 422; missing Idempotency-Key → 400.
+- **Verification:** `npm run typecheck` clean (4/4 workspaces). `npm run test` 85/85, repeated twice
+  for concurrency-test stability. `prisma migrate status` unchanged (no schema drift). DB confirmed
+  empty after the run.
+- **Commit hash:** _pending — recorded at the end of this continuous session's checkpoints._
+- **Deliberate simplifications (see docs/DECISIONS.md D-023–D-026):** Idempotency-Key is required,
+  not merely accepted. No BullMQ-scheduled sweeper yet — lazy expiry, triggered opportunistically at
+  hold-creation and checkout time, fully satisfies the PDF's "lazily on read or sweeper" requirement
+  and closes the realistic inventory-idle gap without queue/worker plumbing; `sweepAllExpiredHolds()`
+  is written and tested, ready to attach to a scheduled job later.
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
