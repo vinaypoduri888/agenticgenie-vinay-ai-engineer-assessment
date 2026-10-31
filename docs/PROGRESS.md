@@ -372,7 +372,7 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   `prisma migrate status` unchanged. DB confirmed empty after a clean run (debris from the
   bug-fixing iterations manually cleared and confirmed non-growing beforehand, same method as
   Stage 2.2/2.3).
-- **Commit hash:** _pending._
+- **Commit hash:** `67ed1ef` — feat(api): implement three-phase checkout with idempotent payments.
 - **Scope notes:** Tickets are issued only on `SUCCESS`; never on `DECLINE` or `TIMEOUT` (verified by
   test). The deeper "event cancelled while a checkout's payment call is genuinely in flight"
   interleaving is implemented (Phase 3 re-checks event status under its own lock and auto-refunds a
