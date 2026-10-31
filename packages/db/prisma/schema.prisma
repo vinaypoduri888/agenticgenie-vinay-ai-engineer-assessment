@@ -1,11 +1,18 @@
 // This is your Prisma schema file, learn more at: https://pris.ly/d/prisma-schema
 //
-// Stage 1: infra-only. No domain models yet — the real ticketing schema
-// (organisers, events, holds, orders, tickets, reviews, audit log, ...) is
-// added in Stage 2. Using the classic `prisma-client-js` generator (not the
-// newer `prisma-client` TS-output generator) to keep the generated client a
-// plain `node_modules/@prisma/client` import with no extra tsconfig flags —
-// see docs/DECISIONS.md.
+// Stage 2: Part A core domain model (organisers, events, inventory, holds,
+// orders, payments, tickets, refunds, reviews, audit log, idempotency).
+// Design rationale, concurrency patterns, and the transaction rules this
+// schema supports are recorded in docs/DECISIONS.md (D-007 onward).
+//
+// Classic `prisma-client-js` generator (not the newer `prisma-client`
+// TS-output generator) — see D-004 from Stage 1.
+//
+// Everything is explicitly @map'd to snake_case table/column names so the
+// raw SQL this project relies on for atomic inventory updates, row locking,
+// and the CHECK constraints / partial unique index below (which Prisma's
+// schema language cannot express) reads naturally without identifier
+// quoting.
 
 generator client {
   provider = "prisma-client-js"
@@ -14,4 +21,492 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum MembershipRole {
+  STAFF
+  ADMIN
+
+  @@map("membership_role")
+}
+
+enum EventStatus {
+  DRAFT
+  PUBLISHED
+  ON_SALE
+  SOLD_OUT
+  CANCELLED
+  COMPLETED
+
+  @@map("event_status")
+}
+
+enum EventSeatStatus {
+  AVAILABLE
+  HELD
+  SOLD
+
+  @@map("event_seat_status")
+}
+
+enum HoldKind {
+  SEATED
+  GA
+
+  @@map("hold_kind")
+}
+
+enum HoldStatus {
+  ACTIVE
+  CONVERTED
+  EXPIRED
+  RELEASED
+  CANCELLED // resolved because the event itself was cancelled — distinct from a user RELEASE or natural EXPIRY
+
+  @@map("hold_status")
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  DECLINED // extension beyond the PDF's 4 states — see docs/DECISIONS.md
+  PARTIALLY_REFUNDED
+  REFUNDED
+
+  @@map("order_status")
+}
+
+enum PaymentProvider {
+  FAKE
+
+  @@map("payment_provider")
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  DECLINED
+  TIMED_OUT
+
+  @@map("payment_status")
+}
+
+enum TicketStatus {
+  VALID
+  REFUNDED
+
+  @@map("ticket_status")
+}
+
+enum IdempotencyStatus {
+  PROCESSING
+  COMPLETED
+
+  @@map("idempotency_status")
+}
+
+// ---------------------------------------------------------------------------
+// Identity, organisers, tenancy
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid(2))
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  name         String
+  createdAt    DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt    DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  memberships        OrganiserMembership[]
+  holds              Hold[]
+  orders             Order[]
+  reviews            Review[]
+  ticketCheckIns     Ticket[]              @relation("TicketCheckedInBy")
+  refundsRequested   Refund[]
+  auditLogs          AuditLog[]
+  idempotencyRecords IdempotencyRecord[]
+
+  @@map("users")
+}
+
+model Organiser {
+  id        String   @id @default(cuid(2))
+  name      String
+  currency  String   @default("INR")
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  memberships OrganiserMembership[]
+  venues      Venue[]
+  events      Event[]
+  auditLogs   AuditLog[]
+
+  @@map("organisers")
+}
+
+model OrganiserMembership {
+  id          String         @id @default(cuid(2))
+  organiserId String         @map("organiser_id")
+  userId      String         @map("user_id")
+  role        MembershipRole
+  createdAt   DateTime       @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  organiser Organiser @relation(fields: [organiserId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organiserId, userId])
+  @@index([userId])
+  @@map("organiser_memberships")
+}
+
+// ---------------------------------------------------------------------------
+// Venues / seat map
+// ---------------------------------------------------------------------------
+
+model Venue {
+  id          String   @id @default(cuid(2))
+  organiserId String   @map("organiser_id")
+  name        String
+  address     String
+  city        String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  organiser Organiser @relation(fields: [organiserId], references: [id], onDelete: Restrict)
+  sections  Section[]
+  events    Event[]
+
+  // Composite-FK target: lets Event enforce "this venue belongs to this
+  // organiser" at the database level (see Event.venue below), not just in
+  // application code.
+  @@unique([id, organiserId])
+  @@index([organiserId])
+  @@index([city])
+  @@map("venues")
+}
+
+model Section {
+  id        String   @id @default(cuid(2))
+  venueId   String   @map("venue_id")
+  name      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  venue Venue @relation(fields: [venueId], references: [id], onDelete: Cascade)
+  rows  Row[]
+
+  @@unique([venueId, name])
+  @@map("sections")
+}
+
+model Row {
+  id        String   @id @default(cuid(2))
+  sectionId String   @map("section_id")
+  label     String
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  seats   Seat[]
+
+  @@unique([sectionId, label])
+  @@map("rows")
+}
+
+model Seat {
+  id        String   @id @default(cuid(2))
+  rowId     String   @map("row_id")
+  label     String
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  row        Row         @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  eventSeats EventSeat[]
+
+  @@unique([rowId, label])
+  @@map("seats")
+}
+
+// ---------------------------------------------------------------------------
+// Events and inventory
+// ---------------------------------------------------------------------------
+
+model Event {
+  id                String      @id @default(cuid(2))
+  organiserId       String      @map("organiser_id")
+  venueId           String      @map("venue_id")
+  title             String
+  description       String
+  category          String
+  status            EventStatus @default(DRAFT)
+  startsAt          DateTime    @db.Timestamptz(3) @map("starts_at")
+  endsAt            DateTime?   @db.Timestamptz(3) @map("ends_at")
+  refundWindowHours Int         @default(24) @map("refund_window_hours")
+  createdAt         DateTime    @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt         DateTime    @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  organiser  Organiser    @relation(fields: [organiserId], references: [id], onDelete: Restrict)
+  // Composite FK: Postgres only accepts this insert/update if a Venue row
+  // exists whose (id, organiserId) match BOTH columns simultaneously — so an
+  // event can never reference another organiser's venue, enforced by the DB,
+  // not just a service-layer check.
+  venue      Venue        @relation(fields: [venueId, organiserId], references: [id, organiserId], onDelete: Restrict)
+  tiers      TicketTier[]
+  eventSeats EventSeat[]
+  holds      Hold[]
+  orders     Order[]
+  tickets    Ticket[]
+  reviews    Review[]
+
+  @@index([organiserId])
+  @@index([status, createdAt, id])
+  @@index([category])
+  @@map("events")
+}
+
+model TicketTier {
+  id                String   @id @default(cuid(2))
+  eventId           String   @map("event_id")
+  name              String
+  priceMinor        Int      @map("price_minor")
+  totalQuantity     Int      @map("total_quantity")
+  remainingQuantity Int      @map("remaining_quantity")
+  createdAt         DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt         DateTime @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  event   Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  holds   Hold[]
+  tickets Ticket[]
+
+  // remainingQuantity is the column the atomic conditional UPDATE guards for
+  // GA concurrency ("200 buyers / 100 tickets"); backed by a CHECK
+  // constraint added via raw-SQL migration (0 <= remaining <= total).
+  @@unique([eventId, name])
+  @@index([eventId])
+  @@map("ticket_tiers")
+}
+
+model EventSeat {
+  id         String          @id @default(cuid(2))
+  eventId    String          @map("event_id")
+  seatId     String          @map("seat_id")
+  status     EventSeatStatus @default(AVAILABLE)
+  priceMinor Int             @map("price_minor")
+  holdId     String?         @map("hold_id")
+  createdAt  DateTime        @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt  DateTime        @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  event  Event   @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  seat   Seat    @relation(fields: [seatId], references: [id], onDelete: Restrict)
+  hold   Hold?   @relation(fields: [holdId], references: [id], onDelete: SetNull)
+  ticket Ticket?
+
+  // The row the atomic conditional UPDATE guards for seat concurrency ("50
+  // parallel holds on one seat"): status AVAILABLE -> HELD WHERE status =
+  // 'AVAILABLE'. A CHECK constraint (raw-SQL migration) enforces hold_id is
+  // set iff status = 'HELD'.
+  @@unique([eventId, seatId])
+  @@index([holdId])
+  @@index([eventId, status])
+  @@map("event_seats")
+}
+
+// ---------------------------------------------------------------------------
+// Holds
+// ---------------------------------------------------------------------------
+
+model Hold {
+  id             String     @id @default(cuid(2))
+  eventId        String     @map("event_id")
+  userId         String     @map("user_id")
+  kind           HoldKind
+  status         HoldStatus @default(ACTIVE)
+  expiresAt      DateTime   @db.Timestamptz(3) @map("expires_at")
+  gaTicketTierId String?    @map("ga_ticket_tier_id")
+  gaQuantity     Int?       @map("ga_quantity")
+  createdAt      DateTime   @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt      DateTime   @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  event        Event       @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user         User        @relation(fields: [userId], references: [id], onDelete: Restrict)
+  gaTicketTier TicketTier? @relation(fields: [gaTicketTierId], references: [id], onDelete: Restrict)
+  eventSeats   EventSeat[]
+  order        Order?
+
+  // "One active hold per user per event" is a PARTIAL unique index (only
+  // WHERE status = 'ACTIVE') added via raw-SQL migration — Prisma's schema
+  // language can't express a filtered unique constraint.
+  @@index([eventId, userId, status])
+  @@index([status, expiresAt])
+  @@map("holds")
+}
+
+// ---------------------------------------------------------------------------
+// Orders, payments, tickets, refunds
+// ---------------------------------------------------------------------------
+
+model Order {
+  id               String      @id @default(cuid(2))
+  userId           String      @map("user_id")
+  eventId          String      @map("event_id")
+  holdId           String      @unique @map("hold_id")
+  status           OrderStatus @default(PENDING_PAYMENT)
+  totalAmountMinor Int         @map("total_amount_minor")
+  paidByPaymentId  String?     @unique @map("paid_by_payment_id")
+  createdAt        DateTime    @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt        DateTime    @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  user          User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  event         Event     @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  hold          Hold      @relation(fields: [holdId], references: [id], onDelete: Restrict)
+  // The specific Payment attempt that actually resulted in PAID — disambiguates
+  // which of possibly several attempt rows (retries/takeovers) is authoritative.
+  paidByPayment Payment?  @relation("OrderPaidByPayment", fields: [paidByPaymentId], references: [id], onDelete: SetNull)
+  payments      Payment[] @relation("OrderPayments")
+  tickets       Ticket[]
+  refunds       Refund[]
+
+  @@index([userId, createdAt, id])
+  @@index([eventId])
+  @@map("orders")
+}
+
+model Payment {
+  id          String          @id @default(cuid(2))
+  orderId     String          @map("order_id")
+  provider    PaymentProvider @default(FAKE)
+  status      PaymentStatus   @default(PENDING)
+  amountMinor Int             @map("amount_minor")
+  // Shared across every attempt (original + any stale-takeover retries) of
+  // the SAME logical checkout — equal to the owning IdempotencyRecord.id, so
+  // the fake provider's own idempotency ledger dedupes repeat charge calls.
+  externalRef String          @map("external_ref")
+  createdAt   DateTime        @default(now()) @db.Timestamptz(3) @map("created_at")
+  resolvedAt  DateTime?       @db.Timestamptz(3) @map("resolved_at")
+
+  order        Order  @relation("OrderPayments", fields: [orderId], references: [id], onDelete: Cascade)
+  paidForOrder Order? @relation("OrderPaidByPayment")
+
+  @@index([orderId])
+  @@index([externalRef])
+  @@map("payments")
+}
+
+model Ticket {
+  id                String       @id @default(cuid(2))
+  orderId           String       @map("order_id")
+  eventId           String       @map("event_id")
+  eventSeatId       String?      @unique @map("event_seat_id")
+  ticketTierId      String?      @map("ticket_tier_id")
+  code              String       @unique
+  priceMinor        Int          @map("price_minor")
+  status            TicketStatus @default(VALID)
+  checkedInAt       DateTime?    @db.Timestamptz(3) @map("checked_in_at")
+  checkedInByUserId String?      @map("checked_in_by_user_id")
+  refundId          String?      @map("refund_id")
+  createdAt         DateTime     @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt         DateTime     @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  order       Order       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  event       Event       @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  eventSeat   EventSeat?  @relation(fields: [eventSeatId], references: [id], onDelete: SetNull)
+  ticketTier  TicketTier? @relation(fields: [ticketTierId], references: [id], onDelete: Restrict)
+  checkedInBy User?       @relation("TicketCheckedInBy", fields: [checkedInByUserId], references: [id], onDelete: SetNull)
+  refund      Refund?     @relation(fields: [refundId], references: [id], onDelete: SetNull)
+
+  // Exactly one of eventSeatId / ticketTierId is set — enforced by a CHECK
+  // constraint in the raw-SQL migration (seated vs. GA ticket).
+  @@index([orderId])
+  @@index([eventId])
+  @@map("tickets")
+}
+
+model Refund {
+  id                String   @id @default(cuid(2))
+  orderId           String   @map("order_id")
+  amountMinor       Int      @map("amount_minor")
+  reason            String
+  requestedByUserId String   @map("requested_by_user_id")
+  createdAt         DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  order           Order    @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  requestedByUser User     @relation(fields: [requestedByUserId], references: [id], onDelete: Restrict)
+  tickets         Ticket[]
+
+  @@index([orderId])
+  @@map("refunds")
+}
+
+// ---------------------------------------------------------------------------
+// Reviews
+// ---------------------------------------------------------------------------
+
+model Review {
+  id        String   @id @default(cuid(2))
+  eventId   String   @map("event_id")
+  userId    String   @map("user_id")
+  rating    Int
+  text      String
+  createdAt DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  event Event @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@unique([eventId, userId])
+  @@index([eventId, createdAt, id])
+  @@map("reviews")
+}
+
+// ---------------------------------------------------------------------------
+// Audit log (append-only — no updatedAt, no application-level UPDATE/DELETE)
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id          String   @id @default(cuid(2))
+  actorUserId String?  @map("actor_user_id")
+  organiserId String?  @map("organiser_id")
+  action      String
+  entityType  String   @map("entity_type")
+  entityId    String   @map("entity_id")
+  beforeData  Json?    @map("before_data")
+  afterData   Json?    @map("after_data")
+  requestId   String   @map("request_id")
+  createdAt   DateTime @default(now()) @db.Timestamptz(3) @map("created_at")
+
+  actorUser User?      @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+  organiser Organiser? @relation(fields: [organiserId], references: [id], onDelete: SetNull)
+
+  @@index([organiserId, createdAt, id])
+  @@index([entityType, entityId, createdAt, id])
+  @@index([actorUserId])
+  @@map("audit_logs")
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency
+// ---------------------------------------------------------------------------
+
+model IdempotencyRecord {
+  id             String            @id @default(cuid(2))
+  userId         String            @map("user_id")
+  key            String
+  endpoint       String
+  requestHash    String            @map("request_hash")
+  status         IdempotencyStatus @default(PROCESSING)
+  // Ownership token for the stale-takeover protocol (compare-and-swap on
+  // this value) — see docs/DECISIONS.md for the full claim/takeover/finalize
+  // flow. Not a schema-enforced constraint by itself; the safety guarantee
+  // comes from the service layer always gating its authoritative writes on
+  // a matching lockToken inside one transaction.
+  lockToken      String            @map("lock_token")
+  responseStatus Int?              @map("response_status")
+  responseBody   Json?             @map("response_body")
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3) @map("created_at")
+  updatedAt      DateTime          @updatedAt @db.Timestamptz(3) @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key, endpoint])
+  @@map("idempotency_records")
 }

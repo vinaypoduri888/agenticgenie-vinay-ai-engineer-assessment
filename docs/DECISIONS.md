@@ -119,4 +119,160 @@ Important architecture/implementation decisions, in plain language, for intervie
   other projects' databases, I remapped the host side only — the containers are still standard
   Postgres 16 / Redis 7 internally."
 
+### D-007: Part A domain schema — 18 models, no HoldItem/OrderItem
+
+- **Decision:** `packages/db/prisma/schema.prisma` implements the full Part A domain: User,
+  Organiser, OrganiserMembership, Venue, Section, Row, Seat, Event, TicketTier, EventSeat, Hold,
+  Order, Payment, Ticket, Refund, Review, AuditLog, IdempotencyRecord.
+- **Why we chose it:** Mirrors the PDF's minimum domain model directly. Two simplifications from a
+  literal reading of "hold items"/"order items": `EventSeat.holdId` already answers "which seats are
+  in this hold" (no separate `HoldItem` table), and `Ticket` already *is* the order line item — it
+  carries its own price, seat/tier reference, and status (no separate `OrderItem` table). `Event`
+  denormalizes `organiserId` (also derivable via `venue.organiserId`) because tenant-isolation checks
+  run on nearly every query and are security-critical — worth the narrow, explicit duplication.
+  `Organiser.currency` (single currency per organiser) avoids a repeated currency column on every
+  money-bearing row. `Event.refundWindowHours` defaults to 24 (PDF doesn't specify a value).
+- **Alternative considered:** explicit `HoldItem`/`OrderItem` tables for literal fidelity to the
+  PDF's wording — rejected as a pure pass-through layer adding no information `EventSeat`/`Ticket`
+  don't already carry.
+- **Trade-off:** `category` is a plain indexed string, not an enum (PDF doesn't enumerate valid
+  categories); one review per user per event is enforced (`@@unique([eventId, userId])`), not
+  explicitly required by the PDF but matches "review attended events" as one verdict per attendee.
+- **Interview explanation:** "I looked for where the PDF's conceptual entities map onto data that
+  already has to exist somewhere else, and collapsed the ones that would just forward fields."
+
+### D-008: Composite foreign key ties Event to its own organiser's Venue
+
+- **Decision:** `Venue` has `@@unique([id, organiserId])`; `Event.venue` is declared as a composite
+  relation on `(venueId, organiserId) → (Venue.id, Venue.organiserId)`.
+- **Why we chose it:** An event referencing another organiser's venue is a real tenant-isolation
+  bug class, not a hypothetical — this makes it structurally impossible at the database level, not
+  just checked in application code (which still runs first, for a clean 400 instead of a raw
+  constraint-violation error).
+- **Alternative considered:** application-only validation — rejected per explicit instruction; the
+  DB must be the backstop, not the only check.
+- **Trade-off:** none meaningful — one extra unique index on Venue, one composite FK instead of a
+  simple one on Event.
+- **Interview explanation:** "I made `organiserId` part of the join key itself, so the foreign key
+  constraint can't be satisfied unless the venue and the event agree on which organiser owns them."
+
+### D-009: snake_case `@map`/`@@map` everywhere
+
+- **Decision:** every model and non-trivial field has an explicit `@map`/`@@map` to snake_case
+  (e.g. `TicketTier` → `ticket_tiers`, `priceMinor` → `price_minor`).
+- **Why we chose it:** this project relies on hand-written raw SQL for atomic conditional updates,
+  row locking, and the CHECK constraints below (D-010) — all far more ergonomic against lowercase,
+  unquoted Postgres identifiers than Prisma's un-mapped default (which preserves PascalCase and
+  requires quoting every identifier in raw SQL).
+- **Trade-off:** more verbose schema.prisma; worth it given how much raw SQL is planned.
+
+### D-010: Hand-written raw-SQL migration for constraints Prisma can't express
+
+- **Decision:** a second migration (`add_db_constraints`, intentionally separate from the
+  Prisma-generated `init_ticketing_schema` migration so the generated SQL stays untouched) adds:
+  - `CHECK (remaining_quantity >= 0 AND remaining_quantity <= total_quantity)` on `ticket_tiers`.
+  - A **partial** unique index `holds(event_id, user_id) WHERE status = 'ACTIVE'` — "one active hold
+    per user per event," filtered so a user can hold the same event again after a prior hold
+    resolves.
+  - `CHECK` on `holds`: GA fields present iff `kind = 'GA'`, absent iff `kind = 'SEATED'`.
+  - `CHECK` on `event_seats`: `hold_id` set iff `status = 'HELD'`.
+  - `CHECK` on `tickets`: exactly one of `event_seat_id` / `ticket_tier_id` set.
+- **Why we chose it:** Prisma's schema DSL has no CHECK-constraint attribute and no filtered/partial
+  unique index support. All five were manually verified against the live database (constraint
+  listings via `psql \d+`, plus three negative-case inserts inside a rolled-back transaction proving
+  the composite FK, the quantity CHECK, and the partial unique index each reject invalid data) —
+  see docs/PROGRESS.md Stage 2 for the exact commands and output.
+- **Trade-off:** these constraints exist in migration history but aren't visible in schema.prisma
+  itself — documented here and in the schema's own comments so a future schema change doesn't
+  accidentally assume they don't exist. Future `prisma migrate dev` runs diff against the replayed
+  migration history (which includes this file), not live DB introspection, so they won't be
+  silently dropped by an unrelated schema change.
+
+### D-011: Idempotency — claim/finalize/stale-takeover protocol via `lockToken`
+
+- **Decision:** `IdempotencyRecord` has `status (PROCESSING|COMPLETED)`, `lockToken`, `updatedAt`.
+  Claiming a key is an `INSERT`; a unique-violation on retry means a record already exists — replay
+  if `COMPLETED` and the request hash matches, `422` if the hash differs, `409` if `PROCESSING` and
+  fresh. If `PROCESSING` and stale (`updatedAt` older than a configurable grace period, default
+  30s), a new request may take over via a compare-and-swap on the specific old `lockToken` it read
+  (`UPDATE ... WHERE lock_token = :old`) — only one concurrent takeover attempt can win this.
+- **Ownership safety without a `lockToken` column on every table:** rather than propagate
+  `lockToken` onto `Order`/`Payment`/`Ticket`, the authoritative finalize transaction makes the
+  `lockToken`-gated `IdempotencyRecord` update its *first* statement and aborts the whole transaction
+  (touching nothing else) if that update affects zero rows. Postgres holds the row lock from that
+  `UPDATE` for the rest of the transaction, so a concurrent takeover attempt blocks behind it and,
+  once this transaction commits or rolls back, correctly sees the record is no longer the state it
+  expected and doesn't double-process.
+- **Why we chose it over per-table lock columns:** equally safe (transaction atomicity + Postgres
+  row locking does the serializing), without adding an unrelated column to business tables.
+- **Trade-off:** requires the finalize step to always order its writes with the idempotency-gate
+  update first — a convention the service layer must follow consistently, documented here for that
+  reason.
+
+### D-012: Payment checkout — three phases, never a transaction across the external call
+
+- **Decision:** `POST /orders` runs as Phase 1 (transaction: validate event/hold via
+  `SELECT ... FOR UPDATE` on the Event row, re-check `status IN (PUBLISHED, ON_SALE)` and hold
+  `ACTIVE`; create-or-reuse `Order(PENDING_PAYMENT)` by looking up `Order.holdId` first — see below
+  — and create a `Payment(PENDING)` row only when actually about to call the provider) → Phase 2
+  (no open transaction: call the fake payment provider) → Phase 3 (transaction, Event row locked
+  again, `IdempotencyRecord` ownership-gated as in D-011; finalizes `PAID`/`DECLINED`, or — if the
+  event was cancelled mid-flight and the outcome was `SUCCESS` — records the charge and immediately
+  creates a `Refund`, landing the order on `REFUNDED` rather than `PAID`). A client-side timeout on
+  Phase 2 does **not** run "Phase 3 proper" at all — it only writes `UPDATE payments SET
+  status='TIMED_OUT' WHERE id=:myPaymentId AND status='PENDING'` (a row uniquely owned by this
+  attempt), leaving `Order`/`IdempotencyRecord` untouched and eligible for a later takeover.
+- **Why we chose it:** holding a DB transaction open across a (simulated, possibly slow/timing-out)
+  external call blocks connections/locks for the duration — exactly the scenario the PDF's timeout
+  requirement is testing, so it's the one thing the design must not do.
+- **Provider-side dedup:** `Payment.externalRef` equals the owning `IdempotencyRecord.id`, shared
+  across every attempt (original + any takeover) of the same logical checkout. The fake provider
+  keeps its own in-memory ledger keyed by `externalRef` (deliberately *not* a Prisma table — it
+  stands in for a third-party system's ledger, not our durable record); the first call for a given
+  `externalRef` decides the outcome, any later call for the same key replays it. This means a
+  takeover's reconciliation call can't cause a real double charge, because it gets the same answer
+  the original (possibly still-resolving) call will get.
+- **`Order.paidByPaymentId`:** nullable, unique FK to `Payment`, set only by the winning Phase-3
+  transaction — disambiguates which of possibly several `Payment` attempt-rows under one order is
+  the authoritative charge (needed for refund-targeting and display).
+- **Stale-takeover must not create a second Order for the same hold:** Phase 1 always looks up
+  `Order` by `holdId` (unique) first. If found and still `PENDING_PAYMENT`, it's reused — only a new
+  `Payment` row is created (since a new Phase 2 call is about to be made), never a new `Order`. The
+  `Order.holdId` unique constraint is also a hard backstop against this at the DB level.
+- **Event-cancellation coordination:** `POST /events/:id/cancel`'s Step A takes the *same* `SELECT
+  ... FOR UPDATE` lock on the Event row as checkout Phase 1 and Phase 3, as its first statement —
+  this fully serializes the two flows (whichever gets the lock first proceeds; the other re-reads a
+  now-consistent state once it acquires the lock). Refunds triggered by cancellation are processed
+  as **one transaction per order**, not one transaction for the whole cancellation, since the PDF's
+  "no giant transaction across every refund" guidance applies — refunds themselves don't call an
+  external provider in this synchronous fake-refund design (documented scope reduction: only the
+  *charge* path simulates timeouts, matching the PDF's actual reliability requirements), so each
+  refund transaction is still small and fast.
+- **Trade-off:** no proactive background reconciliation sweep in Stage 2's design (an order stuck in
+  `PENDING_PAYMENT` only resolves when a retry arrives) — flagged as a natural extension using the
+  same BullMQ mechanism as the hold-expiry sweeper, once Part A's core flows are implemented.
+
+### D-013: Pagination — `(createdAt, id)` composite keyset cursor, not an autoincrement sequence
+
+- **Decision:** `Event`, `Order`, `Review`, `AuditLog` are paginated via `WHERE (created_at, id) >
+  (:cursorCreatedAt, :cursorId) ORDER BY created_at, id LIMIT n`, backed by a composite index per
+  access pattern (e.g. `events(status, created_at, id)`, `orders(user_id, created_at, id)`). No
+  `seq`/autoincrement column.
+- **Why we chose it:** a `BigInt @default(autoincrement())` sequence is allocated immediately on
+  `nextval()`, independent of transaction commit order — a slower transaction can commit a lower
+  sequence value after a faster one with a higher value is already visible, meaning a reader who has
+  paginated past the higher value would permanently skip the lower one. `(createdAt, id)` doesn't
+  have this specific failure mode for the case the PDF actually tests (new rows inserted while a
+  client pages through results).
+- **Honest limitation (corrected from an earlier overclaim in this design process):** keyset
+  pagination eliminates the classic offset-pagination failure (rows shifting under concurrent
+  inserts) — it is **not** a perfect snapshot under every possible concurrent-commit-order scenario.
+  Two transactions inserting with timestamps T1 < T2 but committing in reversed order could still
+  produce a narrow, accepted gap. Closing that fully needs serializable-snapshot reads or a strictly
+  ordered publish step — out of scope here, and stated as a known limitation in DESIGN.md rather than
+  engineered around.
+- **Trade-off:** rows bulk-inserted in one seed-script transaction share an identical `createdAt`
+  (Postgres's `now()` is frozen per-transaction) and sort only by `id` among themselves — stable and
+  correct for pagination, just not meaningfully chronological for that batch.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

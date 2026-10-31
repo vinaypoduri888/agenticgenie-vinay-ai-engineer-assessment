@@ -72,4 +72,50 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 
 ---
 
+## Stage 2 — Part A core: database schema and migration foundation (2026-10-31)
+
+- **Task:** Implement the full Part A domain model in `packages/db/prisma/schema.prisma` (18
+  models), per the multi-round design review recorded in this conversation and docs/DECISIONS.md
+  (D-007–D-013). No business-logic APIs yet — schema and migrations only, as scoped.
+- **Status:** Implemented and verified at the schema/constraint level (not yet "Verified" in the
+  CLAUDE.md sense of automated tests — that comes with the service-layer stages that use this
+  schema; what's below was hand-verified directly against the live database).
+- **Files changed:**
+  - `packages/db/prisma/schema.prisma` — full rewrite from Stage 1's infra-only placeholder.
+  - `packages/db/prisma/migrations/20261031165147_init_ticketing_schema/migration.sql` —
+    Prisma-generated: 18 tables, 9 enums, all indexes/FKs.
+  - `packages/db/prisma/migrations/20261031165203_add_db_constraints/migration.sql` —
+    hand-written: 3 CHECK constraints + 1 partial unique index Prisma's schema DSL can't express.
+- **Verification actually run:**
+  - `prisma validate` → schema valid.
+  - `prisma generate` → client generated successfully (18 models).
+  - `prisma migrate dev --name init_ticketing_schema` → applied cleanly against the live Stage-1
+    Postgres container (which had zero tables, since Stage 1 only ever ran `db push` on an empty
+    schema).
+  - `prisma migrate dev --create-only --name add_db_constraints` + hand-written SQL +
+    `prisma migrate dev` → applied cleanly.
+  - `prisma migrate status` → "Database schema is up to date!", 2 migrations recorded.
+  - Manually reviewed the full generated `migration.sql` (480 lines) end-to-end for unintended
+    changes — every table, index, FK `onDelete` rule, and the composite FK on `events` matched the
+    approved design exactly; nothing unexpected.
+  - `psql \d+ holds` / `\d+ ticket_tiers` / `\d+ event_seats` / `\d+ tickets` / `\d+ venues` →
+    confirmed all 5 raw-SQL constraints, the composite FK, and `timestamptz` columns are present
+    exactly as designed.
+  - **Negative-case proof** (inside one outer transaction, rolled back at the end — confirmed zero
+    residual rows afterward): (1) inserting an `Event` for organiser B pointing at organiser A's
+    venue → rejected with `events_venue_id_organiser_id_fkey` violation; (2) inserting a
+    `TicketTier` with `remaining_quantity = -1` → rejected with
+    `ticket_tiers_remaining_quantity_bounds` violation; (3) inserting a second `ACTIVE` hold for the
+    same user+event → rejected with `holds_one_active_per_user_event` violation.
+  - `npm run typecheck` → 0 errors, all 4 workspaces (generated Prisma types for all 18 models
+    compile cleanly against existing code).
+  - `npm run test` → 2/2 Stage 1 tests still passing (no regression).
+- **Commit hash:** _pending — see next update._
+- **Remaining issues:** None blocking. The service-layer algorithms this schema supports (Phase
+  1/2/3 checkout, idempotency claim/takeover, event-cancellation lock coordination, refund/inventory
+  lifecycle) are designed and documented in D-011–D-012 but not yet implemented — that's Part A's
+  next stages (auth/RBAC, then events/inventory, then holds, then checkout).
+
+---
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
