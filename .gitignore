@@ -1,0 +1,35 @@
+# Confidential assessment material — never commit
+agenticgenie-vinay-ai-engineer-assessment.pdf
+ticketbooking.docx
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+*.log
+npm-debug.log*
+
+# Prisma
+apps/**/generated/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+
+# Docker volumes
+pgdata/
+redisdata/
+
+# Test artifacts
+playwright-report/
+test-results/
