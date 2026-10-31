@@ -187,3 +187,29 @@ describe("event publishing and status transitions", () => {
     expect(response.status).toBe(409);
   });
 });
+
+describe("listing an organiser's own events", () => {
+  it("returns only the calling organiser's own events", async () => {
+    const { organiser, venue, auth } = await adminSetup();
+    const { organiser: otherOrganiser, venue: otherVenue } = await adminSetup();
+    await createTestEvent(organiser.id, venue.id, { title: "Mine" });
+    await createTestEvent(otherOrganiser.id, otherVenue.id, { title: "Not mine" });
+
+    const response = await request(app).get(`/organisers/${organiser.id}/events`).set("Authorization", auth);
+
+    expect(response.status).toBe(200);
+    expect(response.body.items).toHaveLength(1);
+    expect(response.body.items[0].title).toBe("Mine");
+  });
+
+  it("returns 404 for a non-member", async () => {
+    const { organiser } = await adminSetup();
+    const outsider = await createTestUser();
+
+    const response = await request(app)
+      .get(`/organisers/${organiser.id}/events`)
+      .set("Authorization", `Bearer ${signAccessToken(outsider.id)}`);
+
+    expect(response.status).toBe(404);
+  });
+});

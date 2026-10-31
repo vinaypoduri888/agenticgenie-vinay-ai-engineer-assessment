@@ -95,6 +95,17 @@ export async function getEventForOrganiser(organiserId: string, eventId: string)
   return buildEventDetail(eventId);
 }
 
+/** Not explicitly listed in the PDF's minimum contract, but necessary for
+ * any organiser-side "my events" UI — without it there's no way to
+ * discover an organiser's own event ids at all. A small, obvious extension. */
+export async function listEventsForOrganiser(organiserId: string) {
+  return prisma.event.findMany({
+    where: { organiserId },
+    orderBy: [{ createdAt: "desc" }],
+    include: { venue: { select: { name: true, city: true } } },
+  });
+}
+
 export async function updateEvent(ctx: ActionContext, eventId: string, body: UpdateEventBody) {
   const existing = await requireOrganiserEvent(ctx.organiserId, eventId);
   if (!EDITABLE_STATUSES.includes(existing.status)) {
@@ -242,4 +253,31 @@ export async function getPublicEventDetail(eventId: string) {
     throw new ApiError(404, "NOT_FOUND", "Event not found");
   }
   return buildEventDetail(eventId);
+}
+
+/** Not in the PDF's minimum contract — added because selecting specific
+ * seats to hold is impossible from the client side without a per-seat
+ * listing; the event detail response only carries an aggregate
+ * availability summary. A small, obvious extension for "a simple seat
+ * grid/list," which the PDF explicitly says is sufficient. */
+export async function listEventSeats(eventId: string) {
+  const event = await prisma.event.findUnique({ where: { id: eventId } });
+  if (!event || !DIRECT_VISIBLE_STATUSES.includes(event.status)) {
+    throw new ApiError(404, "NOT_FOUND", "Event not found");
+  }
+
+  const seats = await prisma.eventSeat.findMany({
+    where: { eventId },
+    include: { seat: { include: { row: { include: { section: true } } } } },
+    orderBy: { createdAt: "asc" },
+  });
+
+  return seats.map((es) => ({
+    id: es.id,
+    status: es.status,
+    priceMinor: es.priceMinor,
+    section: es.seat.row.section.name,
+    row: es.seat.row.label,
+    seat: es.seat.label,
+  }));
 }

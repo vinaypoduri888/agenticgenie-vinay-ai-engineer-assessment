@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { validateQuery } from "../../middleware/validate.js";
 import { eventsCatalogueQuerySchema, type EventsCatalogueQuery } from "./schemas.js";
-import { getPublicEventDetail, listPublicEvents } from "./service.js";
+import { getPublicEventDetail, listEventSeats, listPublicEvents } from "./service.js";
 
 // Mounted at /events — no auth. Attendees (and anyone else) browse freely.
 export const publicEventsRouter = Router();
@@ -15,4 +15,9 @@ publicEventsRouter.get("/", validateQuery(eventsCatalogueQuerySchema), async (re
 publicEventsRouter.get("/:eventId", async (req, res) => {
   const event = await getPublicEventDetail(req.params.eventId as string);
   res.json(event);
+});
+
+publicEventsRouter.get("/:eventId/seats", async (req, res) => {
+  const seats = await listEventSeats(req.params.eventId as string);
+  res.json({ items: seats });
 });

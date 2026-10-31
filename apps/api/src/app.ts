@@ -8,6 +8,7 @@ import { requestId } from "./middleware/requestId.js";
 import { requireAuth } from "./middleware/requireAuth.js";
 import { auditRouter } from "./modules/audit/router.js";
 import { authRouter } from "./modules/auth/router.js";
+import { meMembershipsRouter } from "./modules/auth/meMembershipsRouter.js";
 import { eventsRouter } from "./modules/events/router.js";
 import { publicEventsRouter } from "./modules/events/publicRouter.js";
 import { holdsRouter } from "./modules/holds/router.js";
@@ -39,6 +40,7 @@ export function createApp() {
   app.use("/holds", requireAuth, holdsRouter);
   app.use("/orders", requireAuth, ordersRouter);
   app.use("/me/orders", requireAuth, myOrdersRouter);
+  app.use("/me/memberships", requireAuth, meMembershipsRouter);
   app.use("/tickets", requireAuth, ticketsRouter);
 
   // Must be registered last, and keep all 4 params (err, req, res, next) —

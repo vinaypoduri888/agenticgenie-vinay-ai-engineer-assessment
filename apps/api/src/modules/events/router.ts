@@ -18,6 +18,11 @@ function ctx(req: { user?: { id: string }; membership?: { organiserId: string };
   };
 }
 
+eventsRouter.get("/", requireOrganiserMembership(), async (req, res) => {
+  const list = await events.listEventsForOrganiser(req.membership!.organiserId);
+  res.json({ items: list });
+});
+
 eventsRouter.post("/", requireAdmin(), validateBody(createEventBodySchema), async (req, res) => {
   const event = await events.createEvent(ctx(req), req.body);
   res.status(201).json(event);

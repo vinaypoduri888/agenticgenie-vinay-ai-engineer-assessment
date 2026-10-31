@@ -171,3 +171,31 @@ describe("cursor pagination", () => {
     expect(response.status).toBe(400);
   });
 });
+
+describe("public event seat listing", () => {
+  it("lists individual seats with section/row/seat labels and status", async () => {
+    const organiser = await createTestOrganiser();
+    const venue = await createTestVenue(organiser.id);
+    const event = await createTestEvent(organiser.id, venue.id, { status: "PUBLISHED" });
+    const section = await prisma.section.create({ data: { venueId: venue.id, name: "Orchestra" } });
+    const row = await prisma.row.create({ data: { sectionId: section.id, label: "A" } });
+    const seat = await prisma.seat.create({ data: { rowId: row.id, label: "1" } });
+    await prisma.eventSeat.create({ data: { eventId: event.id, seatId: seat.id, priceMinor: 50000 } });
+
+    const response = await request(app).get(`/events/${event.id}/seats`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.items).toEqual([
+      expect.objectContaining({ section: "Orchestra", row: "A", seat: "1", status: "AVAILABLE", priceMinor: 50000 }),
+    ]);
+  });
+
+  it("returns 404 for a DRAFT event's seats", async () => {
+    const organiser = await createTestOrganiser();
+    const venue = await createTestVenue(organiser.id);
+    const event = await createTestEvent(organiser.id, venue.id, { status: "DRAFT" });
+
+    const response = await request(app).get(`/events/${event.id}/seats`);
+    expect(response.status).toBe(404);
+  });
+});
