@@ -39,5 +39,56 @@ export const openApiDocument = {
         },
       },
     },
+    "/auth/register": {
+      post: {
+        summary: "Create an attendee account",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  email: { type: "string", format: "email" },
+                  password: { type: "string", minLength: 8, maxLength: 72 },
+                  name: { type: "string", minLength: 1, maxLength: 200 },
+                },
+                required: ["email", "password", "name"],
+              },
+            },
+          },
+        },
+        responses: {
+          "201": { description: "Account created; returns { token, user }" },
+          "409": { description: "Email already registered" },
+          "400": { description: "Validation error" },
+        },
+      },
+    },
+    "/auth/login": {
+      post: {
+        summary: "Log in with email and password",
+        requestBody: {
+          required: true,
+          content: {
+            "application/json": {
+              schema: {
+                type: "object",
+                properties: {
+                  email: { type: "string", format: "email" },
+                  password: { type: "string" },
+                },
+                required: ["email", "password"],
+              },
+            },
+          },
+        },
+        responses: {
+          "200": { description: "Returns { token, user }" },
+          "401": { description: "Incorrect email or password" },
+          "400": { description: "Validation error" },
+        },
+      },
+    },
   },
 } as const;

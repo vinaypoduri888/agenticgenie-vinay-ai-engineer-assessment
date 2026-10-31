@@ -15,7 +15,7 @@ existing is not enough.
 | # | Entity | Notes | Status |
 |---|---|---|---|
 | D1 | Organiser | isolated account | Not started |
-| D2 | User | role attendee (platform-wide) or org membership staff/admin | Not started |
+| D2 | User | role attendee (platform-wide) or org membership staff/admin | Tested — `packages/db/prisma/schema.prisma` (User, OrganiserMembership); `apps/api/src/middleware/requireAuth.ts`, `requireOrganiser.ts` |
 | D3 | Venue / seat map | sections → rows → seats, and/or GA capacity | Not started |
 | D4 | Event | status: draft→published→on_sale→sold_out\|cancelled\|completed | Not started |
 | D5 | Hold | temp reservation, expires after N minutes (default 10, configurable) | Not started |
@@ -28,7 +28,7 @@ existing is not enough.
 
 | # | Workflow | Status |
 |---|---|---|
-| W1 | Auth / login | Not started |
+| W1 | Auth / login | Tested — `apps/api/src/modules/auth/` + `apps/api/test/auth/register-login.test.ts` |
 | W2 | Event create/publish/update/cancel | Not started |
 | W3 | Public catalogue + search | Not started |
 | W4 | Event detail + live availability | Not started |
@@ -47,7 +47,7 @@ existing is not enough.
 
 | # | Endpoint | Status |
 |---|---|---|
-| E1 | `POST /auth/login` | Not started |
+| E1 | `POST /auth/login` | Tested — `apps/api/src/modules/auth/router.ts` (plus `POST /auth/register`, an extension beyond the PDF's minimum) |
 | E2 | `GET /events?city=&from=&to=&category=&q=&limit=20&cursor=` | Not started |
 | E3 | `GET /events/:id` | Not started |
 | E4 | `POST /holds` `{event_id, seat_ids[] \| tier_id+qty}` → 201/409 | Not started |

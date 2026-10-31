@@ -275,4 +275,53 @@ Important architecture/implementation decisions, in plain language, for intervie
   (Postgres's `now()` is frozen per-transaction) and sort only by `id` among themselves — stable and
   correct for pagination, just not meaningfully chronological for that batch.
 
+### D-014: bcryptjs + jsonwebtoken for auth, not native bcrypt/argon2
+
+- **Decision:** passwords are hashed with `bcryptjs` (pure JS); sessions are a single stateless JWT
+  signed with `jsonwebtoken`, HS256 only, carrying just `{ sub: userId }`.
+- **Why we chose it:** `bcryptjs` has no native build step — `argon2` and native `bcrypt` both
+  require node-gyp/a C++ toolchain, which is a real risk to the PDF's ≤5-command, any-machine setup
+  requirement (this project already hit native-build friction with Prisma's own engine in Stage 1).
+  bcrypt remains OWASP-acceptable even though Argon2id is now their top recommendation — the
+  reliability trade-off is worth it here. Pinning JWT verification to `algorithms: ['HS256']`
+  explicitly prevents algorithm-confusion attacks (a token claiming a different/weaker algorithm).
+- **Why the token carries only `sub`:** embedding role/organiserId in the token would mean a
+  membership change doesn't take effect until the token expires. Every permission check re-queries
+  `OrganiserMembership` fresh, per request — slightly more DB load, substantially simpler reasoning
+  about staleness and revocation.
+- **Why requireAuth re-fetches the user from the DB on every request:** there's no refresh-token /
+  revocation-list system in this design (a documented auth shortcut) — re-fetching is what stands in
+  for revocation: a deleted account's still-unexpired token stops working on its very next request,
+  rather than continuing to work until expiry.
+- **Trade-off:** no logout/revocation before natural expiry; `JWT_EXPIRES_IN` defaults to 12h as a
+  balance between not forcing re-login during a demo/interview session and not being absurdly long.
+
+### D-015: 404-vs-403 split between `requireOrganiserMembership` and `requireOrganiserRole`
+
+- **Decision:** a user with *no* membership for the resolved organiser always gets 404 (existence-
+  hiding, per the PDF's isolation rule). A user who *is* a member but lacks the required role (e.g.
+  STAFF hitting an ADMIN-only route) gets 403, not 404.
+- **Why we chose it:** 404 is for "you have no relationship to this scope, so neither confirm nor
+  deny anything about it exists." 403 is for "this scope is already known to exist for you — you're
+  a member — you just don't have enough privilege for this specific action." Collapsing both into
+  404 would be over-hiding (no isolation benefit, since the user already knows they're a member) and
+  collapsing both into 403 would leak existence for genuinely out-of-scope organisers.
+- **Interview explanation:** "404 answers 'do you have any business being here at all'; 403 answers
+  'given that you do, are you allowed to do *this*.' Only the first one needs to hide existence."
+
+### D-016: `canRefundOrder` implemented as a pure policy function now, no refund endpoint yet
+
+- **Decision:** the self-refund rule ("staff can't refund their own order; admins can refund their
+  own, the one exception") is implemented as a standalone, dependency-free function in
+  `apps/api/src/modules/auth/policies.ts`, unit-tested directly, with no `Order`/refund HTTP route
+  built around it yet.
+- **Why we chose it:** the rule is genuinely an authorization-foundations concern (it's a decision
+  about who may act on whose behalf, same category as the role middleware), so it belongs in this
+  stage per the explicit test requirement — but the refund *endpoint* belongs to a later Part A
+  stage once `Order`/`Refund` business logic exists. Writing the decision function now means the
+  later refund route is a thin wrapper that calls an already-tested function, not new untested logic
+  bolted on under time pressure.
+- **Trade-off:** none — this is pure, stateless logic; wiring it into a real route later is
+  mechanical.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

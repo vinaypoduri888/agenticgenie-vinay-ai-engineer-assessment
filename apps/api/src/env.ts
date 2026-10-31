@@ -6,6 +6,9 @@ const envSchema = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   REDIS_URL: z.string().min(1, "REDIS_URL is required"),
   CORS_ORIGIN: z.string().default("http://localhost:3000"),
+  JWT_SECRET: z.string().min(32, "JWT_SECRET must be at least 32 characters"),
+  JWT_EXPIRES_IN: z.string().default("12h"),
+  BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(4).max(15).default(10),
 });
 
 export type Env = z.infer<typeof envSchema>;

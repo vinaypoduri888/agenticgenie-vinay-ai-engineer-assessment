@@ -41,6 +41,9 @@ jobs:
       PORT: 4000
       CORS_ORIGIN: http://localhost:3000
       NEXT_PUBLIC_API_URL: http://localhost:4000
+      JWT_SECRET: ci-only-secret-0000000000000000000000000000000000000000
+      JWT_EXPIRES_IN: 12h
+      BCRYPT_SALT_ROUNDS: 4
 
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +57,7 @@ jobs:
 
       - run: npm run db:generate
 
-      - run: npm run db:push
+      - run: npm run db:migrate:deploy
 
       - run: npm run typecheck
 

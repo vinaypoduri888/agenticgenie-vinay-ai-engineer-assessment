@@ -118,4 +118,91 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 
 ---
 
+## Stage 2.1 — Authentication and RBAC foundations (2026-10-31)
+
+- **Task:** Registration/login, JWT-based auth middleware, organiser-scoped STAFF/ADMIN
+  authorization, no business (event/hold/order/payment/ticket/refund) endpoints. Schema unchanged —
+  no genuine blocker was found requiring a schema change.
+- **Status:** Implemented and tested (automated).
+- **Files changed:**
+  - `apps/api/src/env.ts` — added `JWT_SECRET` (required, min 32 chars), `JWT_EXPIRES_IN` (default
+    12h), `BCRYPT_SALT_ROUNDS` (default 10).
+  - `apps/api/src/lib/errors.ts` — `ApiError` class, formatted by a new central error handler.
+  - `apps/api/src/middleware/{requestId,errorHandler,validate,requireAuth,requireOrganiser}.ts` —
+    new shared middleware (request-id generation, PDF-shaped error envelope, Zod body/param
+    validation, JWT-based identity, organiser membership/role gating).
+  - `apps/api/src/modules/auth/{password,jwt,schemas,service,router,policies}.ts` — bcryptjs
+    hashing, JWT sign/verify, Zod request schemas, register/login business logic, the Express
+    router, and the `canRefundOrder` self-refund policy function.
+  - `apps/api/src/types/express.d.ts` — augments `Request` with `requestId`, `user`, `membership`.
+  - `apps/api/src/app.ts` — wires requestId → cors → json → `/health` → `/auth` → errorHandler
+    (error handler last, per Express convention).
+  - `apps/api/src/routes/health.ts` — small refactor to throw `ApiError` instead of a hand-rolled
+    503 body, now that shared error infrastructure exists (keeps `request_id` populated instead of
+    the Stage 1 placeholder `null`).
+  - `apps/api/src/openapi.ts` — documented `/auth/register`, `/auth/login`.
+  - `apps/api/test/helpers/fixtures.ts` — shared test fixtures (user/organiser/membership) with
+    tracked-ID cleanup.
+  - `apps/api/test/auth/{password,jwt,policies,register-login}.test.ts`,
+    `apps/api/test/middleware/{require-auth,require-organiser}.test.ts` — see below.
+  - `apps/api/test/setup.ts` — now loads the real root `.env` (these tests hit the live Postgres
+    container, not a mock) with fallback defaults for CI.
+  - `package.json` / `packages/db/package.json` — added `db:migrate:deploy` / `migrate:deploy`
+    scripts; `.github/workflows/ci.yml` switched from `db:push` to `db:migrate:deploy` (per the
+    explicit instruction to treat migrations, not `db push`, as the deployment strategy) and gained
+    `JWT_SECRET`/`JWT_EXPIRES_IN`/`BCRYPT_SALT_ROUNDS` env vars.
+  - `.env.example`, `.env` (local, untracked) — added the three new auth env vars.
+  - `README.md`, `docs/ASSESSMENT_REQUIREMENTS.md` (D2, W1, E1 → Tested), `docs/DECISIONS.md`
+    (D-014–D-016).
+- **Tests added (34 passing, 7 files):**
+  - Password hashing: round-trip, wrong password rejected, salted (two hashes of the same password
+    differ).
+  - JWT: sign/verify round-trip; rejects expired, wrong-signature, malformed, and
+    missing-subject tokens.
+  - `canRefundOrder`: staff+own order → false; staff+other's order → true; admin+own order → true
+    (documented exception); admin+other's order → true.
+  - `POST /auth/register` / `POST /auth/login` (real DB): successful registration returns no
+    password hash; duplicate email → 409; invalid payload → 400; successful login; wrong password
+    and unknown email both → 401 with an identical code/message (no enumeration).
+  - `requireAuth` (real DB): missing header, malformed header, malformed token, expired token,
+    wrong-signature token, and a well-signed token for a now-deleted user all → 401; a valid token
+    establishes identity for a plain attendee with zero organiser memberships; a request whose body
+    claims a *different* userId still resolves to the token's real identity (proves identity is
+    never taken from client input).
+  - `requireOrganiserMembership` / `requireOrganiserRole` / `requireAdmin` (real DB): member in any
+    role passes the membership-only gate; a user with no membership at all → 404 (not 403); a user
+    who belongs to a *different* organiser → 404 (cross-organiser rejection); staff passes a
+    staff-or-admin gate but gets 403 (not 404) on an admin-only gate; admin passes the admin-only
+    gate; a user with ADMIN on one organiser and STAFF on another is correctly scoped per-organiser
+    (admin-only passes on their own org, 403 on the other, proving role isn't global).
+  - Scope note: full resource-level cross-user tests (e.g. "can't view someone else's *order*") are
+    deferred to each resource's own endpoint test suite once that resource exists — this stage
+    proves the identity-establishment primitive itself can't be spoofed by client input, which every
+    later resource-isolation check depends on.
+- **Verification actually run:**
+  - `npm run typecheck` → 0 errors, all 4 workspaces.
+  - `npm run test` → 34/34 passing, run 4 times total (including 3 repeats after fixing a
+    cross-file test race — see below) to confirm no flakiness.
+  - `prisma migrate status` → still "up to date," 2 migrations, confirming no schema drift was
+    introduced this stage.
+  - `psql` query confirmed zero residual rows in `users`/`organisers`/`organiser_memberships` after
+    the full test run (fixture cleanup verified, not just assumed).
+  - **Bug caught and fixed during this stage:** the first test run had one intermittent-looking
+    failure (passed in isolation, failed in the full suite). Root cause: `register-login.test.ts`'s
+    cleanup deleted users by email prefix `test-auth-`, which was *also* the prefix
+    `test/helpers/fixtures.ts` used for its own unrelated test users — when Vitest ran files in
+    parallel, one file's cleanup deleted another file's in-flight fixtures. Fixed by giving
+    `register-login.test.ts` its own distinct prefix (`test-register-login-`). Documented here
+    rather than silently fixed, since it's a reusable lesson for every future test file: tracked-ID
+    cleanup (`fixtures.ts`'s approach) doesn't have this failure mode; prefix-based cleanup does
+    unless every file's prefix is provably disjoint.
+- **Commit hash:** _pending — see next update._
+- **Remaining issues / scope notes:** No business endpoints yet (by design — next stages). No
+  audit-log entries are written for registration (deferred to when the broader audit-writing
+  convention is established alongside the first real business mutation, to avoid half-wiring it
+  here). No password reset / refresh-token flow (documented auth shortcut, to be written up in
+  `DESIGN.md`).
+
+---
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
