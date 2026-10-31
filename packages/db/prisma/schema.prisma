@@ -1,0 +1,17 @@
+// This is your Prisma schema file, learn more at: https://pris.ly/d/prisma-schema
+//
+// Stage 1: infra-only. No domain models yet — the real ticketing schema
+// (organisers, events, holds, orders, tickets, reviews, audit log, ...) is
+// added in Stage 2. Using the classic `prisma-client-js` generator (not the
+// newer `prisma-client` TS-output generator) to keep the generated client a
+// plain `node_modules/@prisma/client` import with no extra tsconfig flags —
+// see docs/DECISIONS.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
