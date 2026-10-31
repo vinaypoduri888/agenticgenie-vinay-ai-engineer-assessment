@@ -14,22 +14,22 @@ existing is not enough.
 
 | # | Entity | Notes | Status |
 |---|---|---|---|
-| D1 | Organiser | isolated account | Not started |
+| D1 | Organiser | isolated account | Tested — `packages/db/prisma/schema.prisma` (Organiser); isolation enforced and tested in `venues.test.ts`, `events.test.ts`, `audit.test.ts`, `reports/sales.test.ts`, `refunds.test.ts` (cross-organiser → 404) |
 | D2 | User | role attendee (platform-wide) or org membership staff/admin | Tested — `packages/db/prisma/schema.prisma` (User, OrganiserMembership); `apps/api/src/middleware/requireAuth.ts`, `requireOrganiser.ts` |
 | D3 | Venue / seat map | sections → rows → seats, and/or GA capacity | Tested — `apps/api/src/modules/venues/` |
-| D4 | Event | status: draft→published→on_sale→sold_out\|cancelled\|completed | Tested (DRAFT→PUBLISHED only; remaining transitions defined but not yet exposed — see `statusTransitions.ts`) |
-| D5 | Hold | temp reservation, expires after N minutes (default 10, configurable) | Not started |
-| D6 | Order / Ticket | order: pending_payment→paid→partially_refunded\|refunded; ticket: unique code + check-in state | Not started |
-| D7 | Review | free-text, attendee, completed events, untrusted content (Part B) | Not started |
-| D8 | Audit log | append-only, actor/action/timestamp/before-after/request_id | In progress — venue/event/inventory mutations audited (`apps/api/src/lib/audit.ts`); holds/orders/refunds/check-in land with those stages |
-| D9 | Idempotency record | per-user, per-key, request hash | Not started |
+| D4 | Event | status: draft→published→on_sale→sold_out\|cancelled\|completed | Tested (DRAFT→PUBLISHED and DRAFT/PUBLISHED→CANCELLED exposed and tested; ON_SALE/SOLD_OUT/COMPLETED transitions are defined in `statusTransitions.ts` and reachable only via direct seed-data writes, never via an HTTP transition — a real, documented gap, not yet exposed) |
+| D5 | Hold | temp reservation, expires after N minutes (default 10, configurable) | Tested — `apps/api/src/modules/holds/` + `apps/api/test/holds/holds.test.ts` (13 tests incl. concurrency and expiry) |
+| D6 | Order / Ticket | order: pending_payment→paid→partially_refunded\|refunded; ticket: unique code + check-in state | Tested — `apps/api/src/modules/orders/`, `apps/api/src/modules/tickets/` + `apps/api/test/orders/checkout.test.ts`, `apps/api/test/tickets/checkin.test.ts` |
+| D7 | Review | free-text, attendee, completed events, untrusted content (Part B) | Tested — `apps/api/src/modules/reviews/` + `apps/api/test/reviews/reviews.test.ts` (incl. storing adversarial-looking text as inert data) |
+| D8 | Audit log | append-only, actor/action/timestamp/before-after/request_id | Tested — `apps/api/src/lib/audit.ts`, `apps/api/src/modules/audit/` + `apps/api/test/audit/audit.test.ts`; verified present (with a real, non-null `organiserId`) across every mutating module — venues/events/inventory/holds/orders/tickets/refunds/cancellation/reviews |
+| D9 | Idempotency record | per-user, per-key, request hash | Tested — `packages/db/prisma/schema.prisma` (IdempotencyRecord), `apps/api/src/lib/idempotency.ts`; claim/replay/stale-takeover covered in `holds.test.ts`, `orders/checkout.test.ts`, `refunds.test.ts` |
 
 ### Required workflows
 
 | # | Workflow | Status |
 |---|---|---|
 | W1 | Auth / login | Tested — `apps/api/src/modules/auth/` + `apps/api/test/auth/register-login.test.ts` |
-| W2 | Event create/publish/update/cancel | In progress — create/update/publish done; cancel deliberately deferred to the refund/cancellation stage (needs to resolve active holds and refund paid orders atomically — see docs/DECISIONS.md) |
+| W2 | Event create/publish/update/cancel | Tested — create/update/publish/cancel all implemented (`apps/api/src/modules/events/cancellation.ts`) and tested (`apps/api/test/events/cancellation.test.ts`) |
 | W3 | Public catalogue + search | Tested — city/date-range/category/text filters, keyset pagination |
 | W4 | Event detail + live availability | Tested — ticket-tier remaining counts + overall seat availability summary (per-section breakdown deferred, see docs/DECISIONS.md) |
 | W5 | Seat/GA holds | Tested — `apps/api/src/modules/holds/` |
@@ -82,13 +82,13 @@ Error shape: `{"error": {"code": "...", "message": "...", "request_id": "..."}}`
 
 | ID | Criterion | How checked | Status |
 |---|---|---|---|
-| A1 | Fresh clone → running seeded app in ≤5 commands | README followed literally | Not started |
+| A1 | Fresh clone → running seeded app in ≤5 commands | README followed literally | Verified — real `git clone` of the repo into a fresh temp directory, then the README's own 4 chained commands (`npm install`; `docker compose up -d`; `cp .env.example .env && cp apps/web/.env.example apps/web/.env.local && npm run db:generate && npm run db:migrate:deploy && npm run db:seed`; `npm run dev`), run for real against isolated containers/ports. Result: API came up healthy, seed data was queryable through real HTTP calls (`/health` ok, `/auth/login` for a seeded admin succeeded, `/events` returned real seeded rows), and the web frontend started cleanly on an alternate port (its first attempt hit an unrelated port-3000 collision from this sandbox, not a setup defect). Temp clone and its containers/volumes were torn down afterward; the main repo's own running containers and git state were untouched. |
 | A2 | 50 parallel holds on one seat → 1 success/49 conflicts; 200 buyers on 100 GA → exactly 100 sold | Automated concurrency test | Verified — `apps/api/test/holds/holds.test.ts` |
 | A3 | Expired holds release inventory; checkout on expired hold fails cleanly | Automated test, fake clock | Verified — `apps/api/test/holds/holds.test.ts` |
-| A4 | Idempotency: replayed order/refund → no double charge/refund | Automated test | Tested (orders) — `apps/api/test/orders/checkout.test.ts`; refunds land in Stage 2.5 |
-| A5 | All role rules enforced server-side | Tests + curl | Not started |
-| A6 | Isolation: organiser↔organiser, attendee↔attendee across list/get/refund/report/audit | Automated tests | Not started |
-| A7 | Cursor pagination stable under concurrent inserts | Automated test | Tested — `apps/api/test/events/catalogue.test.ts` (event catalogue only so far; `/me/orders`, reviews, and audit pagination reuse the same cursor helper once those endpoints exist) |
+| A4 | Idempotency: replayed order/refund → no double charge/refund | Automated test | Verified — holds (`apps/api/test/holds/holds.test.ts`), orders (`apps/api/test/orders/checkout.test.ts`), and refunds (`apps/api/test/refunds/refunds.test.ts`) all cover same-key-same-body replay (identical result, no double effect) and same-key-different-body (422) |
+| A5 | All role rules enforced server-side | Tests + curl | Verified — `apps/api/test/middleware/require-organiser.test.ts` (membership/role-gate primitive: no-membership → 404, wrong-organiser → 404, insufficient-role-with-membership → 403) plus per-resource attendee/staff/admin checks in `venues.test.ts`, `events.test.ts`, `inventory.test.ts`, `reports/sales.test.ts`, `audit.test.ts`, `refunds.test.ts`, `events/cancellation.test.ts`; the frontend additionally has no client-side role logic of its own to bypass (see docs/DECISIONS.md D-039), confirmed live via Playwright (staff self-refund rejected by the server, not the UI) |
+| A6 | Isolation: organiser↔organiser, attendee↔attendee across list/get/refund/report/audit | Automated tests | Verified — cross-organiser → 404 in `venues.test.ts`, `events.test.ts`, `inventory.test.ts`, `audit.test.ts`, `reports/sales.test.ts`, `refunds.test.ts`, `tickets/checkin.test.ts`; cross-user → 404 in `holds.test.ts` (release/view a stranger's hold), `orders/checkout.test.ts` (checkout against a stranger's hold), `refunds.test.ts` (refund a stranger's order) |
+| A7 | Cursor pagination stable under concurrent inserts | Automated test | Verified — same no-duplicates/no-skips-under-concurrent-insert test pattern run against all four cursor-paginated list endpoints: event catalogue (`apps/api/test/events/catalogue.test.ts`), `/me/orders` (`apps/api/test/orders/my-orders.test.ts`), event reviews (`apps/api/test/reviews/reviews.test.ts`), and the organiser audit feed (`apps/api/test/audit/audit.test.ts`) |
 | A8 | Every state change produces an audit entry with actor + request id | Tests + UI | Tested across venues/events/inventory/holds/orders/tickets/refunds/cancellation/reviews |
 
 Common traps to avoid (from PDF): UI-only permission checks; SELECT-then-UPDATE races; counting
@@ -218,10 +218,10 @@ category, p50/p95 latency, mean tokens/case. Committed Markdown/HTML sample repo
 
 | # | Deliverable | Status |
 |---|---|---|
-| DL1 | GitHub repo, progressive commit history (no single giant commit) | In progress (git initialized) |
-| DL2 | README.md (what/architecture/≤5-command setup/demo logins/tests+evals/env vars/limitations) | Not started |
+| DL1 | GitHub repo, progressive commit history (no single giant commit) | Verified — 28 focused Conventional Commits from Stage 0 through Stage 2.8 (`git log --oneline`); no single giant commit |
+| DL2 | README.md (what/architecture/≤5-command setup/demo logins/tests+evals/env vars/limitations) | Implemented — `README.md` exists and covers architecture, library rationale, setup (verified for real, see A1), demo logins, ports, and env vars. Gap: its "Status" banner is stale — still says "Frontend integration ... remaining work," written before Stage 2.8; needs a refresh, and it should gain an explicit "known limitations" section before final submission |
 | DL3 | Seed script, usable demo immediately after setup | Verified — `npm run db:seed`, idempotent, run twice and confirmed identical counts |
-| DL4 | Tests: concurrency, idempotency, hold expiry, isolation, role rules, pagination | Not started |
+| DL4 | Tests: concurrency, idempotency, hold expiry, isolation, role rules, pagination | Verified — concurrency (`holds.test.ts`, `tickets/checkin.test.ts`), idempotency (`holds.test.ts`, `orders/checkout.test.ts`, `refunds.test.ts`), hold expiry (`holds.test.ts`), isolation (cross-org/cross-user 404s across most resource suites, see A6), role rules (`require-organiser.test.ts` + per-resource 403 tests, see A5), pagination (all four cursor-paginated endpoints, see A7) |
 | DL5 | Committed eval report (mock required, real model if available) | Not started |
 | DL6 | DESIGN.md | Not started |
 | DL7 | Screen recording (optional, 5–10 min) | Not started |

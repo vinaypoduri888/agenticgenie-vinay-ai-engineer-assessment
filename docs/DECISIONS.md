@@ -669,4 +669,26 @@ real running API and seeded database — not just typechecked or eyeballed:
    an absent attribute). Fixed across the frontend for explicitness — not a functional bug, but worth
    fixing once found rather than working around it only in the test.
 
+### D-042: `ON_SALE` / `SOLD_OUT` / `COMPLETED` event-status transitions stay seed-only
+
+- **Decision:** `statusTransitions.ts` defines and unit-tests the full state machine
+  (`PUBLISHED→ON_SALE→SOLD_OUT→COMPLETED`, with cancellation from any non-terminal state), but no
+  HTTP endpoint exists to drive `PUBLISHED→ON_SALE`, `ON_SALE↔SOLD_OUT`, or `→COMPLETED`, and nothing
+  auto-derives `SOLD_OUT` from inventory hitting zero. Only the seed script sets these statuses
+  directly, for demo data variety.
+- **Why we chose it:** found during the final consolidated acceptance-testing pass (an audit
+  sub-agent flagged it while correcting docs/ASSESSMENT_REQUIREMENTS.md). Checked against the PDF's
+  actual required workflow list (W2: "create/publish/update/cancel") and acceptance criteria
+  (A1–A8): none of them name these three transitions. Checkout logic already treats `PUBLISHED` and
+  `ON_SALE` identically (`status IN (PUBLISHED, ON_SALE)`, see the Stage-2-schema transaction
+  design), so attendees can already buy tickets for a `PUBLISHED` event — `ON_SALE` carries no
+  functional difference today, only a cosmetic one. Building three more endpoints (or an
+  inventory-triggered auto-transition) for states nothing in the mandatory spec exercises would be
+  scope creep this late, not a fix for a real defect.
+- **Trade-off:** the event-status enum's middle states are only ever reachable via direct seed
+  writes, never through a real user action — documented plainly in `README.md`'s "Known
+  limitations" rather than silently left unbuilt. If asked in interview: the correct production fix
+  is a small admin "mark on sale" action plus an inventory-service hook that flips `SOLD_OUT`
+  atomically alongside the last unit's sale, inside the same transaction that decrements it.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

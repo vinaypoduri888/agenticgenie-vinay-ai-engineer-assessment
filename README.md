@@ -5,10 +5,14 @@ AI agent harness and evaluation suite (Part B) on top of it, plus written design
 See [CLAUDE.md](CLAUDE.md) for the full project brief and [docs/](docs/) for the detailed
 requirements checklist, progress log and decisions log.
 
-> **Status:** Part A backend complete (auth/RBAC, venues, events, inventory, holds, checkout,
-> tickets, check-in, refunds, cancellation, reviews, sales reports, audit) and seeded with synthetic
-> demo data. Frontend integration and full acceptance-criteria verification are the remaining work.
-> See [docs/PROGRESS.md](docs/PROGRESS.md) for the stage-by-stage log.
+> **Status:** Part A complete — backend (auth/RBAC, venues, events, inventory, holds, checkout,
+> tickets, check-in, refunds, cancellation, reviews, sales reports, audit) and a connected Next.js
+> frontend for all three personas (attendee, organiser admin, organiser staff), seeded with
+> synthetic demo data, with acceptance criteria A1–A8 verified by automated tests (and A1 also
+> verified manually via a real fresh-clone run). Part B (AI agent harness) and Part C (design notes)
+> have not been started yet. See [docs/PROGRESS.md](docs/PROGRESS.md) for the stage-by-stage log and
+> [docs/ASSESSMENT_REQUIREMENTS.md](docs/ASSESSMENT_REQUIREMENTS.md) for the full requirements
+> checklist with status per item.
 
 ## Architecture
 
@@ -32,8 +36,10 @@ talks to PostgreSQL (via `packages/db`'s Prisma client) and, later, Redis.
   no-oversell guarantees; Postgres is the single source of truth for inventory (never Redis).
 - **Zod** — one validation library shared across the API request layer, the agent's tool schemas,
   and environment config, so types aren't hand-duplicated.
-- **Next.js** — server components let the UI fetch directly from the API without a separate client
-  data-fetching library for this stage.
+- **Next.js** — App Router pages, all client components; the frontend holds its JWT in `localStorage`
+  and calls the API directly via a thin `fetch` wrapper, with no client-side permission logic of its
+  own (see `docs/DECISIONS.md` D-038/D-039) — simplest option for a correctness-focused assessment
+  where the backend enforces every permission regardless of how the frontend stores its token.
 - **Redis** — provisioned now, used later (Part A hold-expiry sweeper); never the source of truth.
 - **bcryptjs + jsonwebtoken** — pure-JS password hashing (no native build step to break `npm
   install` across OSes) and a minimal, established JWT library for a stateless bearer token.
@@ -105,9 +111,11 @@ npm run typecheck   # tsc --noEmit, all workspaces
 Public (no auth):
 - `POST /auth/register`, `POST /auth/login`
 - `GET /events` (filters: `city`, `from`, `to`, `category`, `q`, `limit`, `cursor`), `GET /events/:id`
+- `GET /events/:id/seats` (individual seat listing, for the seat-picker UI)
 - `GET /events/:id/reviews`
 
 Authenticated, attendee-scoped:
+- `GET /me/memberships` (which organiser(s) the caller belongs to, and in what role)
 - `POST /holds` `[Idempotency-Key]`, `DELETE /holds/:id`
 - `POST /orders` `[Idempotency-Key]` (`X-Payment-Scenario: success|decline|timeout_then_success|
   timeout_then_decline` to exercise the fake provider deterministically), `GET /me/orders`
@@ -117,6 +125,7 @@ Authenticated, attendee-scoped:
 
 Organiser-scoped (`/organisers/:organiserId/...`), membership required, most writes admin-only:
 - `GET`/`POST /venues`, `GET`/`PATCH /venues/:id`, `POST /venues/:id/sections[/...rows[/...seats]]`
+- `GET /events` (this organiser's own event list, for the management UI)
 - `POST /events`, `GET`/`PATCH /events/:id`, `POST /events/:id/publish`, `POST /events/:id/cancel`
 - `POST /events/:id/ticket-tiers`, `POST /events/:id/seats/generate`
 - `GET /reports/sales` (`from`, `to`, `group_by=event|day|tier`) — any member
@@ -133,15 +142,23 @@ permissions come only from an `OrganiserMembership` row.
 
 ## Known limitations
 
-- Frontend integration is in progress — see `docs/PROGRESS.md` for current status.
-- Event cancellation is implemented but there's no endpoint for the `PUBLISHED → ON_SALE →
-  SOLD_OUT` transitions yet (not reachable from any current flow; the transition rule itself is
-  written and tested in `apps/api/src/modules/events/statusTransitions.ts`).
+- Event cancellation is implemented, but there's no HTTP endpoint for the `PUBLISHED → ON_SALE →
+  SOLD_OUT → COMPLETED` transitions — the transition rule itself is written and unit-tested in
+  `apps/api/src/modules/events/statusTransitions.ts`, and nothing auto-derives `SOLD_OUT` from
+  inventory either, so those three statuses are only ever set by the seed script, never by a real
+  user action. Not required by any of the PDF's listed workflows or acceptance criteria, but worth
+  flagging rather than leaving silently unbuilt.
 - No BullMQ-scheduled hold-expiry sweeper — expiry is lazy, triggered opportunistically at
   hold-creation and checkout time (PDF-compliant; see `docs/DECISIONS.md` D-025).
 - No password reset / refresh-token flow (documented auth shortcut — single long-lived access
   token; see `DESIGN.md` once written).
+- The frontend is a set of client components using `localStorage` for the JWT (no SSR of
+  authenticated pages, no refresh on token expiry beyond a hard redirect to `/login`) — a deliberate
+  simplification for this assessment's scope, not a security shortcut (see `docs/DECISIONS.md`
+  D-038/D-039).
 - `apps/api`'s `build`/`start` scripts exist and work but aren't needed for local dev (`npm run
   dev` runs TypeScript directly via `tsx`).
-- Occasional transient test flakiness was observed on this machine (non-reproducing on retry,
-  never traced to a code defect) — see `docs/PROGRESS.md` Stage 2.7 for details.
+- Occasional transient test flakiness was observed on this machine a handful of times across the
+  whole session (non-reproducing on retry, never traced to a code defect) — see `docs/PROGRESS.md`
+  Stage 2.4/2.6/2.8 for details.
+- Part B (AI agent harness + evals) and Part C (design notes) have not been started yet.
