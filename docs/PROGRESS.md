@@ -110,7 +110,7 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   - `npm run typecheck` → 0 errors, all 4 workspaces (generated Prisma types for all 18 models
     compile cleanly against existing code).
   - `npm run test` → 2/2 Stage 1 tests still passing (no regression).
-- **Commit hash:** _pending — see next update._
+- **Commit hash:** `a52dba7` — feat(db): implement Part A ticketing domain schema and migrations.
 - **Remaining issues:** None blocking. The service-layer algorithms this schema supports (Phase
   1/2/3 checkout, idempotency claim/takeover, event-cancellation lock coordination, refund/inventory
   lifecycle) are designed and documented in D-011–D-012 but not yet implemented — that's Part A's
