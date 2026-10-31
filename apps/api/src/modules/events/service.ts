@@ -19,6 +19,12 @@ const DIRECT_VISIBLE_STATUSES: EventStatus[] = ["PUBLISHED", "ON_SALE", "SOLD_OU
  * configured while the event hasn't gone further than PUBLISHED. */
 export const EDITABLE_STATUSES: EventStatus[] = ["DRAFT", "PUBLISHED"];
 
+/** Refunding a ticket for an event in one of these statuses never releases
+ * its inventory back to sale — the event is over or gone, so there's
+ * nothing left to resell it for. Shared by the refund endpoint and event
+ * cancellation's bulk refund. */
+export const INVENTORY_RELEASE_BLOCKED_STATUSES: EventStatus[] = ["CANCELLED", "COMPLETED"];
+
 /** Exported for reuse by the inventory module (ticket tiers / seat
  * generation), which needs the same "does this event belong to this
  * organiser" check before touching its inventory. */

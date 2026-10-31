@@ -36,9 +36,9 @@ existing is not enough.
 | W6 | Hold expiry + inventory release | Tested — lazy expiry, opportunistic sweep (see DECISIONS D-025) |
 | W7 | Checkout via fake payment provider (succeed/decline/timeout configurable) | Tested — `apps/api/src/modules/orders/checkout.ts` |
 | W8 | Paid orders + ticket generation | Tested |
-| W9 | Attendee order/ticket history | Not started |
-| W10 | Full/partial refunds | Not started |
-| W11 | Ticket check-in (one-time, concurrency-safe) | Not started |
+| W9 | Attendee order/ticket history | Tested — `GET /me/orders` |
+| W10 | Full/partial refunds | Tested |
+| W11 | Ticket check-in (one-time, concurrency-safe) | Tested — 10 simultaneous check-ins on one code → 1 success |
 | W12 | Event reviews | Not started |
 | W13 | Organiser sales reports | Not started |
 | W14 | Scoped audit-log access | Not started |
@@ -54,9 +54,9 @@ existing is not enough.
 | E5 | `DELETE /holds/:id` | Tested |
 | E6 | `POST /orders` `[Idem-Key]` `{hold_id}` → 201 paid / 402 declined / 409 expired | Tested (also 202 for an unresolved timeout, an extension — see DECISIONS D-012) |
 | E7 | `GET /me/orders?cursor=` | Tested |
-| E8 | `POST /orders/:id/refund` `[Idem-Key]` `{ticket_ids[]?, reason}` → 200/403/404/409 | Not started |
-| E9 | `POST /tickets/:code/checkin` → 200/409/404 | Not started |
-| E10 | `POST /events` · `PATCH /events/:id` · `POST /events/:id/cancel` (org admin) | In progress — create/update/publish implemented under `/organisers/:organiserId/events`; cancel deliberately deferred (see W2) |
+| E8 | `POST /orders/:id/refund` `[Idem-Key]` `{ticket_ids[]?, reason}` → 200/403/404/409 | Tested |
+| E9 | `POST /tickets/:code/checkin` → 200/409/404 | Tested |
+| E10 | `POST events` · `PATCH /events/:id` · `POST /events/:id/cancel` (org admin) | Tested — all three implemented under `/organisers/:organiserId/events` |
 | E11 | `GET /events/:id/reviews?cursor=` (public) | Not started |
 | E12 | `GET /organisers/:id/reports/sales?from=&to=&group_by=event\|day\|tier` | Not started |
 | E13 | `GET /audit?entity=&cursor=` (scoped by role) | Not started |

@@ -11,6 +11,7 @@ import { eventsRouter } from "./modules/events/router.js";
 import { publicEventsRouter } from "./modules/events/publicRouter.js";
 import { holdsRouter } from "./modules/holds/router.js";
 import { myOrdersRouter, ordersRouter } from "./modules/orders/router.js";
+import { ticketsRouter } from "./modules/tickets/router.js";
 import { venuesRouter } from "./modules/venues/router.js";
 import { healthRouter } from "./routes/health.js";
 
@@ -30,6 +31,7 @@ export function createApp() {
   app.use("/holds", requireAuth, holdsRouter);
   app.use("/orders", requireAuth, ordersRouter);
   app.use("/me/orders", requireAuth, myOrdersRouter);
+  app.use("/tickets", requireAuth, ticketsRouter);
 
   // Must be registered last, and keep all 4 params (err, req, res, next) —
   // Express identifies error-handling middleware by that arity.

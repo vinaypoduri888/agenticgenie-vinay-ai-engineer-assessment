@@ -495,4 +495,32 @@ Important architecture/implementation decisions, in plain language, for intervie
   discard and retry" reasoning: a side effect you want to *keep* can never live in the same
   transaction as a throw you use to *reject* the overall request.
 
+### D-030: Refund authorization — pure attendee is window-bound, organiser staff/admin are not
+
+- **Decision:** a refund request from the order's own owner, who has **no** `OrganiserMembership`
+  for that event's organiser, is a standard self-service cancellation and is rejected once the
+  event's `refundWindowHours` deadline has passed. A request from someone who **is** a member
+  (STAFF or ADMIN) — whether refunding their own order or someone else's — is a discretionary
+  organiser action and is never window-bound; it's gated purely by `canRefundOrder` (Stage 2.1):
+  STAFF cannot refund their own order (403), ADMIN can (the documented exception).
+- **Why we chose it:** the PDF's refund-window language ("cancel within the event's refund window")
+  describes consumer-facing attendee self-service, not organiser-side discretionary refunds — an
+  admin manually refunding a dissatisfied customer after the window shouldn't be blocked by the same
+  rule designed to stop late self-service cancellations. The self-refund rule (not the window) is
+  what actually needs to apply uniformly to staff regardless of timing, which is what closes the real
+  loophole (a staff member buying a ticket and refunding themselves using their elevated
+  organiser-side refund permission, bypassing the attendee window).
+
+### D-031: `performRefund` takes a transaction client, doesn't open its own
+
+- **Decision:** the core refund logic (per-ticket conditional update, inventory release rules,
+  `Refund` row, `Order` status recompute, audit) lives in one function that accepts an existing
+  `Prisma.TransactionClient` rather than starting its own transaction.
+- **Why we chose it:** it's called from two different transaction-boundary shapes — the user-facing
+  `POST /orders/:id/refund` endpoint (one transaction, inside `withIdempotency`'s callback) and event
+  cancellation's bulk refund (one transaction **per order**, explicitly not one giant transaction
+  across every order — see the Stage-2-schema-review design). Factoring the shared logic this way
+  means both call sites get identical inventory-release/duplicate-prevention behavior without
+  duplicating it, while each still controls its own transaction boundary correctly for its situation.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

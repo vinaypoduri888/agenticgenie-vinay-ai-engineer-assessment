@@ -3,6 +3,7 @@ import { requireAdmin, requireOrganiserMembership } from "../../middleware/requi
 import { validateBody } from "../../middleware/validate.js";
 import * as events from "./service.js";
 import * as inventory from "../inventory/service.js";
+import { cancelEvent } from "./cancellation.js";
 import { createEventBodySchema, updateEventBodySchema } from "./schemas.js";
 import { createTicketTierBodySchema, generateEventSeatsBodySchema } from "../inventory/schemas.js";
 
@@ -40,6 +41,11 @@ eventsRouter.patch(
 eventsRouter.post("/:eventId/publish", requireAdmin(), async (req, res) => {
   const event = await events.publishEvent(ctx(req), req.params.eventId as string);
   res.json(event);
+});
+
+eventsRouter.post("/:eventId/cancel", requireAdmin(), async (req, res) => {
+  const result = await cancelEvent(ctx(req), req.params.eventId as string);
+  res.json(result);
 });
 
 eventsRouter.post(

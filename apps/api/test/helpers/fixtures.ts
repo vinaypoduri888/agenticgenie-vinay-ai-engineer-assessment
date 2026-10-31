@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { prisma } from "@agenticgenie/db";
 import type { EventStatus, MembershipRole } from "@prisma/client";
+import request from "supertest";
+import type { Express } from "express";
 import { hashPassword } from "../../src/modules/auth/password.js";
+import { signAccessToken } from "../../src/modules/auth/jwt.js";
 
 // Tracks organisers and users created via these helpers. Cleanup is scoped
 // by organiserId/userId (not by individually-tracked venue/event/etc. row
@@ -131,4 +134,37 @@ export async function resetFixtures(): Promise<void> {
     await prisma.user.deleteMany({ where: { id: { in: createdUserIds } } });
     createdUserIds.length = 0;
   }
+}
+
+/** Drives a real hold + checkout through the actual HTTP endpoints (not a
+ * direct Prisma shortcut) so tests downstream of "a paid order exists"
+ * (check-in, refunds, cancellation) exercise the same code path a real
+ * attendee would. Returns the parsed order response body (status PAID). */
+export async function purchaseGaTickets(
+  app: Express,
+  userId: string,
+  eventId: string,
+  tierId: string,
+  quantity = 1,
+) {
+  const auth = `Bearer ${signAccessToken(userId)}`;
+  const hold = await request(app)
+    .post("/holds")
+    .set("Authorization", auth)
+    .set("Idempotency-Key", randomUUID())
+    .send({ eventId, tierId, quantity });
+  if (hold.status !== 201) {
+    throw new Error(`purchaseGaTickets: hold failed with ${hold.status}: ${JSON.stringify(hold.body)}`);
+  }
+
+  const order = await request(app)
+    .post("/orders")
+    .set("Authorization", auth)
+    .set("Idempotency-Key", randomUUID())
+    .send({ holdId: hold.body.id });
+  if (order.status !== 201) {
+    throw new Error(`purchaseGaTickets: order failed with ${order.status}: ${JSON.stringify(order.body)}`);
+  }
+
+  return order.body;
 }

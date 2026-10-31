@@ -379,4 +379,51 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   late success) but not yet end-to-end tested with a real concurrent cancellation request — that
   lands with Stage 2.5's cancellation endpoint.
 
+## Stage 2.5 — Tickets, check-in, refunds, and cancellation (2026-10-31)
+
+- **Task:** `POST /tickets/:code/checkin`, `POST /orders/:id/refund`, event cancellation
+  (`POST /organisers/:organiserId/events/:eventId/cancel`). No schema changes.
+- **Status:** Implemented and tested.
+- **Files:** `apps/api/src/modules/tickets/{service,router}.ts`; `apps/api/src/modules/refunds/
+  {schemas,service}.ts` (`performRefund` shared core + `requestRefund` user-facing endpoint, wired
+  into `orders/router.ts`); `apps/api/src/modules/events/cancellation.ts` (Step A: lock event,
+  resolve holds, one transaction; Step B: one transaction per paid order, not one giant transaction);
+  `apps/api/src/modules/events/service.ts` (+`INVENTORY_RELEASE_BLOCKED_STATUSES` export, shared by
+  refunds and cancellation); `apps/api/test/{tickets/checkin,refunds/refunds,events/cancellation}
+  .test.ts` (23 new tests); `apps/api/test/helpers/fixtures.ts` (+`purchaseGaTickets`, driving a real
+  hold+checkout through the actual HTTP endpoints so downstream tests exercise the same path a real
+  attendee would).
+- **Tests (119 passing total, 23 new):** check-in — staff of the owning organiser succeeds; a second
+  check-in on the same code → 409 `ALREADY_CHECKED_IN`; **10 simultaneous check-in attempts on one
+  code → exactly 1 success, 9 clean 409s** (concurrency-safe, same conditional-update pattern as
+  holds); staff of a *different* organiser → 404 (not 403); a plain attendee with no membership →
+  404; check-in on a CANCELLED event → 409; unknown code → 404. Refunds — attendee self-refund
+  within the window restores GA inventory; past the window → 409 `REFUND_WINDOW_CLOSED`; refunding
+  someone else's order → 404; refunding an already-refunded order → 409 `ORDER_NOT_REFUNDABLE`
+  (never double-refunds); idempotent replay returns the identical refund; staff refunds another
+  attendee's order; **staff refunding their own order → 403** (the specific rule this whole
+  assessment keeps calling out); admin refunds their own order even past the window (the documented
+  exception); cross-organiser staff probing an order → 404; a checked-in ticket's refund does **not**
+  return its inventory to sale. Cancellation — cancels the event and resolves an active hold,
+  restoring GA inventory exactly; refunds every paid order for the event, exactly one `Refund` row
+  per order; **repeated cancellation is a safe no-op** (`alreadyCancelled: true`, zero additional
+  refunds, confirmed by counting `Refund` rows after a second call); staff forbidden (403); cancelling
+  an already-COMPLETED event → 409 `INVALID_STATUS_TRANSITION` (terminal state, no outgoing
+  transition); a hold created before cancellation can no longer be checked out afterward → 409.
+- **One real bug caught by the test suite, fixed immediately:** the first version of the "refunds
+  within the window" test asserted the wrong expected value (compared against `tier.remainingQuantity
+  + 1` instead of recognizing the prior purchase had already decremented it, so purchase-then-refund
+  nets back to the *original* value) — a test bug, not a product bug; fixed and re-verified.
+- **Verification:** `npm run typecheck` clean. `npm run test` 119/119, run twice for stability. `prisma
+  migrate status` unchanged. DB confirmed empty after a clean run, no residue this time.
+- **Commit hash:** _pending._
+- **Scope notes:** The deeper "event cancelled while a specific checkout's payment call is genuinely
+  in flight" race (Phase 3's own re-check-and-auto-refund path, built in Stage 2.4) is exercised
+  indirectly here (cancellation correctly blocks *new* checkouts against a cancelled event), but a
+  true concurrent interleaving test (cancel request racing an in-flight checkout's Phase 2) was not
+  written — doing so deterministically would need the fake provider to expose a controllable delay
+  hook, which doesn't exist yet. Flagged as a known test-coverage gap, not a design gap: the code
+  path itself was reviewed and is structurally identical to the already-tested "pre-cancelled event"
+  case, just entered via a narrower timing window.
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
