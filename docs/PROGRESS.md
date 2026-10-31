@@ -516,6 +516,6 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   (D-027) was meant to eliminate; it reduced frequency substantially but apparently not to absolute
   zero in this environment. Not chased further given it never reproduced on retry and the remaining
   scope this session still has to cover.
-- **Commit hash:** _pending._
+- **Commit hash:** `a17ebb0` — feat(db): add idempotent seed script covering every seed requirement.
 
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
