@@ -21,7 +21,7 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   - Tooling confirmed available locally: Node v20.17.0, npm 10.8.2, Docker 29.8.2,
     Docker Compose v5.6.0, PostgreSQL client 18.6, Git 2.55.0.
 - **Tests executed:** None yet (no code).
-- **Commit hash:** _pending — first commit will cover Stage 0 docs._
+- **Commit hash:** `77b1757` — docs: add project instructions, requirements checklist, progress and decisions logs.
 - **Remaining issues:** None blocking; awaiting approval to start Stage 1 (project foundation).
 
 ---
