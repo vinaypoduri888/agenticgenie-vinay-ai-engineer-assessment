@@ -196,7 +196,7 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
     rather than silently fixed, since it's a reusable lesson for every future test file: tracked-ID
     cleanup (`fixtures.ts`'s approach) doesn't have this failure mode; prefix-based cleanup does
     unless every file's prefix is provably disjoint.
-- **Commit hash:** _pending — see next update._
+- **Commit hash:** `ba8b6d1` — feat(api): implement authentication and organiser RBAC foundations.
 - **Remaining issues / scope notes:** No business endpoints yet (by design — next stages). No
   audit-log entries are written for registration (deferred to when the broader audit-writing
   convention is established alongside the first real business mutation, to avoid half-wiring it
