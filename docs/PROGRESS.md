@@ -416,7 +416,7 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   nets back to the *original* value) — a test bug, not a product bug; fixed and re-verified.
 - **Verification:** `npm run typecheck` clean. `npm run test` 119/119, run twice for stability. `prisma
   migrate status` unchanged. DB confirmed empty after a clean run, no residue this time.
-- **Commit hash:** _pending._
+- **Commit hash:** `b58e61d` — feat(api): implement check-in, refunds, and event cancellation.
 - **Scope notes:** The deeper "event cancelled while a specific checkout's payment call is genuinely
   in flight" race (Phase 3's own re-check-and-auto-refund path, built in Stage 2.4) is exercised
   indirectly here (cancellation correctly blocks *new* checkouts against a cancelled event), but a
