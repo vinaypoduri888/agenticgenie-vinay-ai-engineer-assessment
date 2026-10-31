@@ -118,4 +118,54 @@ describe("audit log access", () => {
     expect(response.status).toBe(400);
     expect(response.body.error.code).toBe("INVALID_ENTITY_FILTER");
   });
+
+  describe("cursor pagination", () => {
+    it("is stable under a concurrent insert between page fetches — no duplicates, no skips", async () => {
+      const organiser = await createTestOrganiser();
+      const venue = await createTestVenue(organiser.id);
+      const admin = await createTestUser();
+      await createTestMembership(organiser.id, admin.id, "ADMIN");
+
+      async function createAuditedEvent(title: string) {
+        return request(app)
+          .post(`/organisers/${organiser.id}/events`)
+          .set("Authorization", authFor(admin.id))
+          .send({
+            venueId: venue.id,
+            title,
+            description: "d",
+            category: "comedy",
+            startsAt: new Date(Date.now() + 86_400_000).toISOString(),
+          });
+      }
+
+      const seeded = [];
+      for (let i = 0; i < 3; i++) {
+        seeded.push((await createAuditedEvent(`Audit Event ${i}`)).body);
+      }
+
+      const page1 = await request(app)
+        .get(`/organisers/${organiser.id}/audit`)
+        .query({ limit: 2 })
+        .set("Authorization", authFor(admin.id));
+      expect(page1.body.items).toHaveLength(2);
+      expect(page1.body.next_cursor).not.toBeNull();
+
+      const inserted = (await createAuditedEvent("Inserted mid-pagination")).body;
+
+      const page2 = await request(app)
+        .get(`/organisers/${organiser.id}/audit`)
+        .query({ limit: 2, cursor: page1.body.next_cursor })
+        .set("Authorization", authFor(admin.id));
+
+      const page1Ids = page1.body.items.map((e: { id: string }) => e.id);
+      const page2Ids = page2.body.items.map((e: { id: string }) => e.id);
+
+      expect(page1Ids.some((id: string) => page2Ids.includes(id))).toBe(false);
+
+      const page2EntityIds = page2.body.items.map((e: { entityId: string }) => e.entityId);
+      expect(page2EntityIds).toContain(seeded[2].id);
+      expect(page2EntityIds).toContain(inserted.id);
+    });
+  });
 });

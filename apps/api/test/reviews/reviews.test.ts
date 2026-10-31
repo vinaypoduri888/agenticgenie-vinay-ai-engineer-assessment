@@ -120,4 +120,50 @@ describe("review eligibility and uniqueness", () => {
     expect(response.status).toBe(200);
     expect(response.body.items[0].text).toBe(maliciousText); // stored as plain data, not executed
   });
+
+  describe("cursor pagination", () => {
+    it("is stable under a concurrent insert between page fetches — no duplicates, no skips", async () => {
+      const organiser = await createTestOrganiser();
+      const venue = await createTestVenue(organiser.id);
+      const event = await createTestEvent(organiser.id, venue.id, { status: "PUBLISHED" });
+      const tier = await createTestTicketTier(event.id, { totalQuantity: 10 });
+
+      const attendees = [];
+      for (let i = 0; i < 4; i++) {
+        const attendee = await createTestUser();
+        await purchaseGaTickets(app, attendee.id, event.id, tier.id, 1);
+        attendees.push(attendee);
+      }
+      await prisma.event.update({ where: { id: event.id }, data: { status: "COMPLETED" } });
+
+      const seeded = [];
+      for (let i = 0; i < 3; i++) {
+        const created = await request(app)
+          .post(`/events/${event.id}/reviews`)
+          .set("Authorization", authFor(attendees[i]!.id))
+          .send({ rating: 4, text: `Review ${i}` });
+        seeded.push(created.body);
+      }
+
+      const page1 = await request(app).get(`/events/${event.id}/reviews`).query({ limit: 2 });
+      expect(page1.body.items).toHaveLength(2);
+      expect(page1.body.next_cursor).not.toBeNull();
+
+      const inserted = await request(app)
+        .post(`/events/${event.id}/reviews`)
+        .set("Authorization", authFor(attendees[3]!.id))
+        .send({ rating: 5, text: "Inserted mid-pagination" });
+
+      const page2 = await request(app)
+        .get(`/events/${event.id}/reviews`)
+        .query({ limit: 2, cursor: page1.body.next_cursor });
+
+      const page1Ids = page1.body.items.map((r: { id: string }) => r.id);
+      const page2Ids = page2.body.items.map((r: { id: string }) => r.id);
+
+      expect(page1Ids.some((id: string) => page2Ids.includes(id))).toBe(false);
+      expect(page2Ids).toContain(seeded[2].id);
+      expect(page2Ids).toContain(inserted.body.id);
+    });
+  });
 });
