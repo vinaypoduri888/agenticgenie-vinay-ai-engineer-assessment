@@ -9,6 +9,7 @@ import { _resetFakeProviderForTests } from "../../src/modules/payments/fakeProvi
 import {
   createTestEvent,
   createTestOrganiser,
+  createTestSeatMap,
   createTestTicketTier,
   createTestUser,
   createTestVenue,
@@ -45,6 +46,23 @@ async function setupHold(opts?: { totalQuantity?: number; quantity?: number }) {
   return { organiser, venue, event, tier, user, hold: holdResponse.body };
 }
 
+async function setupSeatedHold() {
+  const organiser = await createTestOrganiser();
+  const venue = await createTestVenue(organiser.id);
+  const event = await createTestEvent(organiser.id, venue.id, { status: "PUBLISHED" });
+  const { seat } = await createTestSeatMap(venue.id);
+  const eventSeat = await prisma.eventSeat.create({ data: { eventId: event.id, seatId: seat.id, priceMinor: 120000 } });
+  const user = await createTestUser();
+
+  const holdResponse = await request(app)
+    .post("/holds")
+    .set("Authorization", authFor(user.id))
+    .set("Idempotency-Key", randomUUID())
+    .send({ eventId: event.id, seatIds: [seat.id] });
+
+  return { organiser, venue, event, seat, eventSeat, user, hold: holdResponse.body };
+}
+
 describe("checkout — success path", () => {
   it("pays the order, issues one ticket per GA unit, converts the hold", async () => {
     const { user, hold } = await setupHold({ quantity: 2 });
@@ -75,6 +93,30 @@ describe("checkout — success path", () => {
     const tickets = await prisma.ticket.findMany({ where: { orderId: response.body.id } });
     expect(tickets).toHaveLength(2);
     expect(new Set(tickets.map((t) => t.code)).size).toBe(2); // unique codes
+  });
+
+  it("pays a SEATED order, issues one ticket for the seat, and marks the seat SOLD with no dangling hold reference", async () => {
+    const { eventSeat, user, hold } = await setupSeatedHold();
+
+    const response = await request(app)
+      .post("/orders")
+      .set("Authorization", authFor(user.id))
+      .set("Idempotency-Key", randomUUID())
+      .send({ holdId: hold.id });
+
+    expect(response.status).toBe(201);
+    expect(response.body.tickets).toHaveLength(1);
+    expect(response.body.tickets[0].eventSeatId).toBe(eventSeat.id);
+
+    // Regression test: issueTickets must clear holdId when moving a seat to
+    // SOLD, or it violates the event_seats_hold_id_matches_status CHECK
+    // constraint (hold_id must be NULL whenever status isn't 'HELD') — this
+    // seated-success path wasn't exercised by any earlier test (every other
+    // checkout test used GA holds), and the bug was only caught by the seed
+    // script's first real seated purchase. See docs/PROGRESS.md.
+    const eventSeatAfter = await prisma.eventSeat.findUniqueOrThrow({ where: { id: eventSeat.id } });
+    expect(eventSeatAfter.status).toBe("SOLD");
+    expect(eventSeatAfter.holdId).toBeNull();
   });
 
   it("enforces one order per hold — the DB unique constraint on Order.holdId", async () => {

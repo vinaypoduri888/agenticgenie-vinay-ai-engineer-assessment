@@ -209,7 +209,13 @@ async function issueTickets(tx: Prisma.TransactionClient, order: Order, hold: Ho
           priceMinor: seat.priceMinor,
         },
       });
-      await tx.eventSeat.update({ where: { id: seat.id }, data: { status: "SOLD" } });
+      // holdId must be cleared here too — the CHECK constraint
+      // (event_seats_hold_id_matches_status) requires hold_id IS NULL
+      // whenever status isn't 'HELD'. Caught by the seed script's first
+      // real seated-ticket purchase; no prior test had exercised a seated
+      // checkout success path end-to-end (all of Stage 2.4's own tests used
+      // GA holds) — see docs/PROGRESS.md.
+      await tx.eventSeat.update({ where: { id: seat.id }, data: { status: "SOLD", holdId: null } });
       tickets.push(ticket);
     }
     return tickets;

@@ -67,16 +67,16 @@ Error shape: `{"error": {"code": "...", "message": "...", "request_id": "..."}}`
 
 | # | Requirement | Status |
 |---|---|---|
-| S1 | 2 organisers | Not started |
-| S2 | Each organiser: 1 admin + 2 staff | Not started |
-| S3 | ≥6 attendees | Not started |
-| S4 | ≥12 events, 3 cities, all statuses represented | Not started |
-| S5 | ≥1 seated event | Not started |
-| S6 | ≥1 GA event | Not started |
-| S7 | ≥1 nearly sold-out event | Not started |
-| S8 | ≥1 event with expired holds | Not started |
-| S9 | Completed events with ≥30 reviews total | Not started |
-| S10 | ≥2 reviews with hidden instruction-like injection text | Not started |
+| S1 | 2 organisers | Verified — Laugh Factory Pune, Riverfront Live |
+| S2 | Each organiser: 1 admin + 2 staff | Verified — 2 admins, 4 staff total |
+| S3 | ≥6 attendees | Verified — 16 |
+| S4 | ≥12 events, 3 cities, all statuses represented | Verified — 12 events, Pune/Mumbai/Bangalore, 2 per status |
+| S5 | ≥1 seated event | Verified — 1, 12 EventSeat rows, 2 sold |
+| S6 | ≥1 GA event | Verified — multiple |
+| S7 | ≥1 nearly sold-out event | Verified — 2/10 and 1/5 remaining |
+| S8 | ≥1 event with expired holds | Verified — 1 unswept ACTIVE hold, expiresAt in the past |
+| S9 | Completed events with ≥30 reviews total | Verified — 32 reviews across 2 completed events |
+| S10 | ≥2 reviews with hidden instruction-like injection text | Verified — 2 adversarial reviews seeded |
 
 ### Acceptance criteria A1–A8
 
@@ -220,7 +220,7 @@ category, p50/p95 latency, mean tokens/case. Committed Markdown/HTML sample repo
 |---|---|---|
 | DL1 | GitHub repo, progressive commit history (no single giant commit) | In progress (git initialized) |
 | DL2 | README.md (what/architecture/≤5-command setup/demo logins/tests+evals/env vars/limitations) | Not started |
-| DL3 | Seed script, usable demo immediately after setup | Not started |
+| DL3 | Seed script, usable demo immediately after setup | Verified — `npm run db:seed`, idempotent, run twice and confirmed identical counts |
 | DL4 | Tests: concurrency, idempotency, hold expiry, isolation, role rules, pagination | Not started |
 | DL5 | Committed eval report (mock required, real model if available) | Not started |
 | DL6 | DESIGN.md | Not started |

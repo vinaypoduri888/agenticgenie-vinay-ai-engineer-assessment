@@ -15,7 +15,8 @@
     "db:push": "npm run push -w packages/db",
     "db:migrate:deploy": "npm run migrate:deploy -w packages/db",
     "db:migrate:dev": "npm run migrate:dev -w packages/db",
-    "db:studio": "npm run studio -w packages/db"
+    "db:studio": "npm run studio -w packages/db",
+    "db:seed": "npm run seed -w apps/api"
   },
   "devDependencies": {
     "concurrently": "^9.2.5",

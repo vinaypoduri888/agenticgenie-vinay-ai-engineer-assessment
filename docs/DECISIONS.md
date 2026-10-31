@@ -569,4 +569,38 @@ Important architecture/implementation decisions, in plain language, for intervie
   correctness bug — confirmed via `psql` row counts, same verification method used throughout this
   session). Fixed and the existing debris cleared.
 
+### D-036: Seed script lives in `apps/api`, reuses the real service layer
+
+- **Decision:** `apps/api/src/seed.ts` (not `packages/db`) calls `createHold`/`checkout` directly
+  (in-process function calls, no HTTP server needed) to generate every sold/held ticket, rather than
+  hand-crafting `Order`/`Ticket`/`Payment` rows via raw Prisma inserts.
+- **Why we chose it:** `packages/db` is deliberately a dependency-free data-layer package (D-009);
+  a seed script that needs business logic (atomic inventory decrement, idempotency, ticket issuance)
+  belongs next to that logic, not reaching backward from the data layer into the API layer. Reusing
+  the real functions also means every seeded "sold" ticket is guaranteed to satisfy the same
+  invariants a real purchase would — which is exactly what caught the bug below, something
+  hand-crafted rows would have silently gotten wrong instead of catching.
+- **Idempotent re-running:** every seed-created row is identifiable (organiser names "Laugh Factory
+  Pune"/"Riverfront Live", user emails ending in `@seed.test`) and the script deletes exactly that
+  data (same dependency-ordered cleanup as the test suite's `fixtures.ts`) before recreating it —
+  verified by running it twice and confirming identical row counts both times, never touching
+  anything else in the database.
+
+### D-037: Seated checkout had never been exercised end-to-end before the seed script ran it
+
+- **Bug:** `issueTickets`'s seated branch set `EventSeat.status = 'SOLD'` without clearing `hold_id`,
+  violating the `event_seats_hold_id_matches_status` CHECK constraint (D-010) the very first time a
+  seated hold was actually checked out successfully.
+- **Why Stage 2.4's own test suite missed it:** every checkout test used a GA hold; a seated *hold*
+  was tested (Stage 2.3), but no test had carried a seated hold all the way through a successful
+  checkout. The bug was latent in shipped code for two full stages before the seed script's first
+  real seated-ticket purchase hit it.
+- **Fix and the lesson:** cleared `holdId` alongside the status flip, and — more importantly — added
+  the missing regression test directly to `checkout.test.ts` rather than only trusting the seed
+  script to keep catching it. This is the second time in this session a "write realistic data/flows
+  through the real code paths" exercise (first the test suite's own fixtures, now the seed script)
+  surfaced a gap pure unit-style testing of each piece in isolation had missed — worth remembering
+  for Part B's eval design too: cases that drive full, realistic flows end-to-end catch a different
+  class of bug than cases that test one function at a time.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

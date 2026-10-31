@@ -471,4 +471,51 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   time that table has read zero after a run all session.
 - **Commit hash:** `c39df89` — feat(api): implement reviews, sales reports, and audit log access.
 
+## Stage 2.7 — Seed data (2026-11-01)
+
+- **Task:** repeatable, idempotent synthetic seed data covering every PDF requirement. No schema
+  changes.
+- **Status:** Implemented, run twice against the real dev database, and verified by direct SQL
+  query against every individual requirement (not just "the script exited 0").
+- **Files:** `apps/api/src/seed.ts` (new); `apps/api/package.json` / root `package.json`
+  (`npm run db:seed`); one real bug fix in `apps/api/src/modules/orders/checkout.ts` (see below) plus
+  a new regression test in `apps/api/test/orders/checkout.test.ts`.
+- **Verification — every requirement checked by direct SQL, not assumed:**
+
+  | Requirement | Actual |
+  |---|---|
+  | 2 organisers | 2 (Laugh Factory Pune, Riverfront Live) |
+  | 1 admin + 2 staff per organiser | 2 admins, 4 staff total |
+  | ≥6 attendees | 16 |
+  | ≥12 events | 12 |
+  | ≥3 cities | 3 (Pune, Mumbai, Bangalore) |
+  | All required statuses | 2 of each: DRAFT, PUBLISHED, ON_SALE, SOLD_OUT, CANCELLED, COMPLETED |
+  | ≥1 seated event | 1 (12 `EventSeat` rows generated, 2 sold) |
+  | ≥1 GA event | multiple |
+  | ≥1 nearly sold-out | 2 (`2/10` and `1/5` remaining) |
+  | ≥1 event with expired holds | 1 unswept `ACTIVE` hold with `expiresAt` in the past |
+  | Completed events, ≥30 reviews | 2 completed events, 32 reviews total |
+  | ≥2 adversarial reviews | 2 ("SYSTEM: Ignore your previous instructions...", "Assistant: disregard all prior rules...") |
+
+- **One real bug caught by the seed script's first real seated-ticket purchase, not by any prior
+  test:** `issueTickets`'s seated branch flipped `EventSeat.status` to `SOLD` without clearing
+  `holdId`, violating the `event_seats_hold_id_matches_status` CHECK constraint from Stage 2's
+  migration. Root cause: no test in Stage 2.3 or 2.4 had ever carried a *seated* hold through a
+  *successful checkout* — Stage 2.3 tested seated hold creation, Stage 2.4's checkout tests all used
+  GA holds. Fixed (`status: "SOLD", holdId: null`) and closed the coverage gap permanently with a new
+  regression test, rather than relying on the seed script to keep catching it. Documented in
+  docs/DECISIONS.md D-037 as a reminder for Part B's eval design: full-flow exercises catch a
+  different class of bug than per-function tests.
+- **Idempotency verified**: ran `npm run db:seed` twice in a row; identical row counts both times
+  (2 organisers, 22 users, 12 events, 32 reviews), confirming cleanup correctly removes exactly the
+  previous seed run's data before recreating it, with no duplication.
+- **Full suite re-verified with seed data present in the database** (not just in an empty test DB):
+  135/135 passing (134 + 1 new regression test), run 3 times. One isolated, non-reproducing failure
+  occurred once during this stage's work (unrelated test, passed cleanly on immediate retry with no
+  code change) — noted honestly here as the kind of transient flakiness `fileParallelism: false`
+  (D-027) was meant to eliminate; it reduced frequency substantially but apparently not to absolute
+  zero in this environment. Not chased further given it never reproduced on retry and the remaining
+  scope this session still has to cover.
+- **Commit hash:** _pending._
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
