@@ -109,6 +109,22 @@ export async function createTestTicketTier(
 }
 
 export async function resetFixtures(): Promise<void> {
+  // AuditLog's actorUserId/organiserId are onDelete: SetNull by design (real
+  // audit history must survive the actor/organiser being deleted) — which
+  // means it's the one table that does NOT get cleaned up for free by the
+  // deletes below, and would otherwise accumulate indefinitely across test
+  // runs. Delete it explicitly, scoped to what this test actually touched,
+  // while organiserId/actorUserId still point at the tracked ids.
+  if (createdOrganiserIds.length > 0 || createdUserIds.length > 0) {
+    await prisma.auditLog.deleteMany({
+      where: {
+        OR: [
+          ...(createdOrganiserIds.length > 0 ? [{ organiserId: { in: createdOrganiserIds } }] : []),
+          ...(createdUserIds.length > 0 ? [{ actorUserId: { in: createdUserIds } }] : []),
+        ],
+      },
+    });
+  }
   if (createdOrganiserIds.length > 0) {
     const organiserId = { in: createdOrganiserIds };
     const eventWhere = { organiserId };

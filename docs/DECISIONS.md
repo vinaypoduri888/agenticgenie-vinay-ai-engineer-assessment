@@ -523,4 +523,50 @@ Important architecture/implementation decisions, in plain language, for intervie
   means both call sites get identical inventory-release/duplicate-prevention behavior without
   duplicating it, while each still controls its own transaction boundary correctly for its situation.
 
+### D-032: Audit log entries must carry the real `organiserId`, never `null`
+
+- **Decision:** every audit write that happens in an organiser-scoped context (holds, hold expiry,
+  checkout outcomes, check-in, refunds, reviews) resolves and stores the actual event's
+  `organiserId` — fixed a gap where several Stage 2.3/2.4 call sites had been writing `organiserId:
+  null` since no organiser-scoped route was directly involved in those flows.
+- **Why this needed fixing:** caught while building Stage 2.6's audit endpoint, which scopes every
+  query by `organiserId` — entries written with `null` would have been silently invisible to the
+  very audit feature meant to show them, even though the row existed. `expireHold` (called from
+  opportunistic sweeps with no request context at all) now does one small extra lookup of the
+  event's `organiserId` specifically so its audit trail stays queryable.
+
+### D-033: Audit query authorization depends on the query string, not just the route
+
+- **Decision:** `GET /organisers/:organiserId/audit` requires only membership (any role) when
+  `?entity=Type:id` scopes the query to one specific entity, but requires ADMIN when no entity filter
+  is given (the full organiser-wide feed). This check lives in the service function, not as a second
+  static middleware, because the required role is a function of the query string.
+- **Why we chose it:** matches the PDF's split exactly ("viewable per order and per event
+  (organiser members), plus organiser-wide (admin only)") without needing two separate routes or a
+  middleware that inspects query params (which would blur the usual "middleware decides access,
+  handler does work" separation for no real benefit here).
+
+### D-034: Sales reports use raw SQL for all three groupings, net revenue only
+
+- **Decision:** `group_by=event|day|tier` all use `$queryRaw` (not Prisma's `groupBy`), summing
+  `Ticket.priceMinor` where `status = 'VALID'` only.
+- **Why we chose it:** `day` grouping needs `DATE(created_at)`, which Prisma's query builder can't
+  express without raw SQL anyway — using raw SQL for all three keeps the three code paths
+  structurally identical rather than mixing `groupBy` for two cases and raw SQL for the third.
+  Counting only `VALID` tickets means a refund automatically reduces reported revenue with no
+  separate subtraction step — confirmed by a test that refunds a ticket and checks revenue drops to
+  exactly zero.
+
+### D-035: Test fixture cleanup must explicitly clear `AuditLog`, which `SetNull` doesn't
+
+- **Decision:** `resetFixtures()` now deletes `AuditLog` rows matching tracked organiser/user ids as
+  its first step, before deleting the organisers/users those ids belong to.
+- **Why this needed fixing:** `AuditLog.actorUserId`/`organiserId` are `onDelete: SetNull` by design
+  (D-008-adjacent: real audit history must outlive the actor/organiser being deleted) — which means,
+  unlike every other table in this schema, deleting a test's organiser/user does **not** clean up its
+  audit rows; they survive with both fields nulled out. Across many iterations of this session's test
+  runs this had silently accumulated over 1,200 orphaned rows before being caught (debris, not a
+  correctness bug — confirmed via `psql` row counts, same verification method used throughout this
+  session). Fixed and the existing debris cleared.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

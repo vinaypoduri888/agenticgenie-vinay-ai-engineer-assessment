@@ -325,7 +325,7 @@ async function runPhase3(params: {
 
     await writeAuditLog(tx, {
       actorUserId: params.ctx.actorUserId,
-      organiserId: null,
+      organiserId: params.event.organiserId,
       action: auditAction,
       entityType: "Order",
       entityId: params.order.id,

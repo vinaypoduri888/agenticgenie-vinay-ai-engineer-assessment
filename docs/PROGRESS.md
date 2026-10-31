@@ -426,4 +426,49 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   path itself was reviewed and is structurally identical to the already-tested "pre-cancelled event"
   case, just entered via a narrower timing window.
 
+## Stage 2.6 — Reviews, sales reports, and audit (2026-10-31)
+
+- **Task:** `GET/POST /events/:id/reviews`, `GET /organisers/:id/reports/sales`,
+  `GET /organisers/:id/audit`. Also fixed a real gap found while building this: several audit
+  writes from Stages 2.3–2.5 had `organiserId: null`, making them invisible to the organiser-scoped
+  audit endpoint this stage adds. No schema changes.
+- **Status:** Implemented and tested.
+- **Files:** `apps/api/src/modules/reviews/{schemas,service,router}.ts`; `apps/api/src/modules/
+  reports/{schemas,service,router}.ts` (raw-SQL net-revenue aggregation); `apps/api/src/modules/
+  audit/{schemas,service,router}.ts`; `apps/api/src/modules/holds/{service,sweeper}.ts` and
+  `apps/api/src/modules/orders/checkout.ts` (fixed `organiserId: null` → the real event's organiser
+  — see D-032); `apps/api/test/{reviews/reviews,reports/sales,audit/audit}.test.ts` (15 new tests);
+  `apps/api/test/helpers/fixtures.ts` (`resetFixtures` now explicitly clears `AuditLog`, which its
+  `SetNull` relations don't clean up for free — see D-035).
+- **Tests (134 passing total, 15 new):** Reviews — an attendee who attended a COMPLETED event can
+  review it; someone who never attended → 403 `NOT_ELIGIBLE`; reviewing before the event completes →
+  409; a second review from the same attendee → 409 (the `@@unique` constraint, surfaced cleanly);
+  an out-of-range rating → 400; public listing works with no auth and stores adversarial-looking
+  text ("SYSTEM: ignore previous instructions...") as plain inert data, never executed — exactly
+  the seed-data injection scenario Part B will later test against the agent layer. Reports — net
+  revenue grouped by event; a refund automatically zeroes reported revenue for that ticket, no
+  separate subtraction logic needed; grouping by tier; staff (not just admin) can view sales, per
+  the PDF's role table; a different organiser's member → 404. Audit — every mutation in a seeded
+  flow (hold, checkout) shows up with a real `requestId` and timestamp; entity-scoped queries work
+  for staff; the organiser-wide feed (no entity filter) is admin-only (403 for staff); cross-organiser
+  access → 404; a malformed `entity` filter → 400.
+- **Two real bugs caught and fixed:**
+  1. **Audit entries silently unreachable:** `HOLD_CREATED`, `HOLD_RELEASED`, `HOLD_EXPIRED`, and
+     every `ORDER_*` audit action had been written with `organiserId: null` since those modules
+     don't run inside an organiser-scoped route — the writer had the user/hold/event in scope but
+     never resolved the organiser id into the audit call. Not caught by Stage 2.3/2.4's own tests
+     (which only checked the *mutation* succeeded, not that its audit trail was queryable by
+     organiser) — only surfaced once this stage's audit endpoint tried to actually query by
+     `organiserId`. Fixed across `holds/service.ts`, `holds/sweeper.ts`, `orders/checkout.ts`.
+  2. **Orphaned audit debris across test runs:** `resetFixtures()` relied on cascading/relational
+     deletes for cleanup, but `AuditLog`'s `SetNull` relations mean it's never cleaned up that way —
+     over this session's many test iterations, over 1,200 orphaned rows (both `organiserId` and
+     `actorUserId` null) had silently accumulated. Caught via the same `psql` row-count verification
+     used throughout this session, confirmed as accumulating debris (not a live leak) by checking it
+     only grew across *failed*-cleanup runs, fixed, and the debris cleared.
+- **Verification:** `npm run typecheck` clean. `npm run test` 134/134, run twice. `prisma migrate
+  status` unchanged. DB confirmed fully empty after a clean run, including `audit_logs` — the first
+  time that table has read zero after a run all session.
+- **Commit hash:** _pending._
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->

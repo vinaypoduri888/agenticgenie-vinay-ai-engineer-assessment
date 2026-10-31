@@ -35,9 +35,11 @@ export async function expireHold(tx: Prisma.TransactionClient, hold: Hold): Prom
     });
   }
 
+  const event = await tx.event.findUnique({ where: { id: hold.eventId }, select: { organiserId: true } });
+
   await writeAuditLog(tx, {
     actorUserId: null,
-    organiserId: null,
+    organiserId: event?.organiserId ?? null,
     action: "HOLD_EXPIRED",
     entityType: "Hold",
     entityId: hold.id,

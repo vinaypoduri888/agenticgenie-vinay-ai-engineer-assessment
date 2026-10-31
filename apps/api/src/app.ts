@@ -6,11 +6,14 @@ import { openApiDocument } from "./openapi.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { requestId } from "./middleware/requestId.js";
 import { requireAuth } from "./middleware/requireAuth.js";
+import { auditRouter } from "./modules/audit/router.js";
 import { authRouter } from "./modules/auth/router.js";
 import { eventsRouter } from "./modules/events/router.js";
 import { publicEventsRouter } from "./modules/events/publicRouter.js";
 import { holdsRouter } from "./modules/holds/router.js";
 import { myOrdersRouter, ordersRouter } from "./modules/orders/router.js";
+import { reportsRouter } from "./modules/reports/router.js";
+import { reviewsRouter } from "./modules/reviews/router.js";
 import { ticketsRouter } from "./modules/tickets/router.js";
 import { venuesRouter } from "./modules/venues/router.js";
 import { healthRouter } from "./routes/health.js";
@@ -26,8 +29,13 @@ export function createApp() {
   app.use("/health", healthRouter);
   app.use("/auth", authRouter);
   app.use("/events", publicEventsRouter);
+  // requireAuth is applied inside reviewsRouter per-route (GET is public,
+  // POST requires it) — not mounted here, which would force auth on GET too.
+  app.use("/events/:eventId/reviews", reviewsRouter);
   app.use("/organisers/:organiserId/venues", requireAuth, venuesRouter);
   app.use("/organisers/:organiserId/events", requireAuth, eventsRouter);
+  app.use("/organisers/:organiserId/reports", requireAuth, reportsRouter);
+  app.use("/organisers/:organiserId/audit", requireAuth, auditRouter);
   app.use("/holds", requireAuth, holdsRouter);
   app.use("/orders", requireAuth, ordersRouter);
   app.use("/me/orders", requireAuth, myOrdersRouter);

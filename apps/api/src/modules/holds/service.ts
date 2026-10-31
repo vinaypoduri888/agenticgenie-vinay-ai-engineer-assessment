@@ -67,7 +67,7 @@ export async function createHold(
   const result = await withIdempotency(
     { userId: ctx.actorUserId, key: idempotencyKey, endpoint: "POST /holds", requestBody: body },
     async (tx) => {
-      await assertEventHoldable(tx, body.eventId);
+      const event = await assertEventHoldable(tx, body.eventId);
       await assertNoActiveHold(tx, ctx.actorUserId, body.eventId);
 
       const hold =
@@ -77,7 +77,7 @@ export async function createHold(
 
       await writeAuditLog(tx, {
         actorUserId: ctx.actorUserId,
-        organiserId: null,
+        organiserId: event.organiserId,
         action: "HOLD_CREATED",
         entityType: "Hold",
         entityId: hold.id,
@@ -163,7 +163,7 @@ async function allocateGaHold(
 }
 
 export async function releaseHold(ctx: HoldActionContext, holdId: string) {
-  const hold = await prisma.hold.findUnique({ where: { id: holdId } });
+  const hold = await prisma.hold.findUnique({ where: { id: holdId }, include: { event: true } });
   if (!hold || hold.userId !== ctx.actorUserId) {
     throw new ApiError(404, "NOT_FOUND", "Hold not found");
   }
@@ -197,7 +197,7 @@ export async function releaseHold(ctx: HoldActionContext, holdId: string) {
 
     await writeAuditLog(tx, {
       actorUserId: ctx.actorUserId,
-      organiserId: null,
+      organiserId: hold.event.organiserId,
       action: "HOLD_RELEASED",
       entityType: "Hold",
       entityId: holdId,
