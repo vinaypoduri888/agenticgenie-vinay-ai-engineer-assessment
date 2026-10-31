@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: agenticgenie
+          POSTGRES_PASSWORD: agenticgenie
+          POSTGRES_DB: agenticgenie
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agenticgenie"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      NODE_ENV: test
+      DATABASE_URL: postgresql://agenticgenie:agenticgenie@localhost:5432/agenticgenie
+      REDIS_URL: redis://localhost:6379
+      PORT: 4000
+      CORS_ORIGIN: http://localhost:3000
+      NEXT_PUBLIC_API_URL: http://localhost:4000
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm run db:generate
+
+      - run: npm run db:push
+
+      - run: npm run typecheck
+
+      - run: npm run test
+
+      - run: npm run build -w apps/api
+
+      - run: npm run build -w apps/web
