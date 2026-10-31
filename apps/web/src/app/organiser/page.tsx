@@ -46,6 +46,7 @@ export default function OrganiserIndexPage() {
             <Link href={`/organiser/${m.organiserId}/reports`}>Sales reports</Link>
             <Link href={`/organiser/${m.organiserId}/checkin`}>Check in tickets</Link>
             <Link href={`/organiser/${m.organiserId}/refunds`}>Refund an order</Link>
+            <Link href={`/organiser/${m.organiserId}/audit`}>Audit log</Link>
           </div>
         </div>
       ))}
