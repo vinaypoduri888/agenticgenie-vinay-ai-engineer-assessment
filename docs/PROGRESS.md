@@ -469,6 +469,6 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 - **Verification:** `npm run typecheck` clean. `npm run test` 134/134, run twice. `prisma migrate
   status` unchanged. DB confirmed fully empty after a clean run, including `audit_logs` — the first
   time that table has read zero after a run all session.
-- **Commit hash:** _pending._
+- **Commit hash:** `c39df89` — feat(api): implement reviews, sales reports, and audit log access.
 
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
