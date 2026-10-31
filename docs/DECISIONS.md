@@ -603,4 +603,70 @@ Important architecture/implementation decisions, in plain language, for intervie
   for Part B's eval design too: cases that drive full, realistic flows end-to-end catch a different
   class of bug than cases that test one function at a time.
 
+### D-038: Frontend is client-rendered with a localStorage JWT, not server-side auth
+
+- **Decision:** every page that needs data or auth is a `"use client"` component; the JWT and basic
+  user info live in `localStorage` (`lib/api.ts`), attached to every request by one shared
+  `apiFetch` helper. No server components fetch authenticated data, no auth cookie, no middleware.
+- **Why we chose it:** this is explicitly a correctness-over-polish assessment ("a simple seat
+  grid/list is sufficient," "avoid spending time on unnecessary animations or cosmetic polish").
+  Server-side auth (cookies, Next middleware, server-component data fetching with credentials) adds
+  real complexity for no behavioral difference the grading criteria care about — the backend enforces
+  every permission regardless of how the frontend stores its token, so this is purely a presentation-
+  layer simplification, not a security shortcut (the frontend never makes an authorization decision
+  itself; see D-039).
+- **Trade-off:** no SSR of authenticated pages (slightly slower perceived load, a brief "Loading…"
+  on every protected page), not usable with JS disabled. Acceptable for a local-only demo app.
+
+### D-039: The frontend never makes an authorization decision — it only reflects the server's
+
+- **Decision:** no page hides or shows content based on a client-side guess about the user's role.
+  Every write action is attempted against the real endpoint; a 403/404 from the server is caught and
+  displayed as-is (e.g. the refund page lets any logged-in staff/admin *submit* a refund for any
+  order id — the self-refund rejection is the server's 403 message, shown verbatim, not a client-side
+  check that tries to predict it).
+- **Why we chose it:** the instructions are explicit — "do not trust client-side role checks as
+  security." A frontend permission check is, at best, a UX nicety; treating it as authoritative
+  anywhere would contradict the entire server-side-enforcement design this project has maintained
+  since Stage 2.1. Verified directly: a Playwright test submits a staff self-refund through the UI
+  and confirms the server's exact rejection message ("Staff cannot refund their own order") is what
+  appears, not a client-side-blocked form.
+
+### D-040: Three small backend endpoints added specifically to make the frontend possible
+
+- **Decision:** `GET /me/memberships`, `GET /organisers/:organiserId/events` (list), and
+  `GET /events/:eventId/seats` (list) were added during frontend work — none are in the PDF's
+  minimum API contract.
+- **Why we chose it:** each is a genuine blocker, not a nice-to-have: without the first, a logged-in
+  admin/staff user has no way to discover which organiser(s) they belong to at all; without the
+  second, there's no way to list an organiser's own events to manage; without the third, an attendee
+  can't pick a *specific* seat to hold (the event-detail endpoint only ever returned an aggregate
+  seat-availability summary, by design — see D-020). All three are thin, read-only, permission-scoped
+  identically to their sibling endpoints, and each has its own test.
+
+### D-041: Two real bugs found by actually using the app in a browser, not by code review
+
+Per the instructions ("start the dev server and use the feature in a browser before reporting the
+task as complete"), every frontend workflow below was driven end-to-end with Playwright against the
+real running API and seeded database — not just typechecked or eyeballed:
+
+1. **Seated checkout path was already fixed in Stage 2.7** (D-037) — re-verified here by actually
+   generating seats, holding one, and checking out through the UI, not just the API test.
+2. **New bug, found here:** the venue seat-map page's "add row" / "add seat" dropdowns displayed a
+   computed fallback value (`value={state || firstOption.id}`) so the `<select>` always *showed* a
+   valid option, but the submit handlers read the raw state variable directly — which stayed empty
+   until the user manually touched the dropdown. A user who left the pre-selected default in place
+   (the natural thing to do) would silently POST to a URL with a blank id segment. Worse, `addSeat`'s
+   failure path (`if (!section) return;`) swallowed this completely with no error shown at all —
+   exactly the "fake success" / silent failure the instructions explicitly warn against. Fixed by
+   syncing the state to a real value via `useEffect` whenever the data changes, so the displayed
+   value and the submitted value are always the same thing, and by making the remaining defensive
+   branch report an error instead of returning silently. Caught by Playwright clicking through the
+   section → row → seat flow exactly as a real admin would, confirmed by re-running the same test
+   after the fix.
+3. **Minor:** several `<input>` elements had no explicit `type` attribute (defaults to `text`
+   correctly at runtime, but CSS/Playwright attribute selectors like `input[type=text]` don't match
+   an absent attribute). Fixed across the frontend for explicitness — not a functional bug, but worth
+   fixing once found rather than working around it only in the test.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

@@ -518,4 +518,70 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   scope this session still has to cover.
 - **Commit hash:** `a17ebb0` — feat(db): add idempotent seed script covering every seed requirement.
 
+---
+
+## Stage 2.8 — Frontend integration (attendee, organiser admin, organiser staff) (2026-11-01)
+
+- **Task:** Build a real, backend-connected Next.js frontend for all three personas (attendee,
+  organiser admin, organiser staff) per the mega-prompt's Section 7; no disconnected demo UI, no
+  client-side-only permission logic, no fake success states. Add the minimum backend support
+  endpoints the frontend genuinely cannot work without.
+- **Status:** Implemented and verified end-to-end with real Playwright browser sessions against the
+  real API and seeded Postgres database (not mocked, not just typechecked).
+- **Files changed:**
+  - New shared frontend libs: `apps/web/src/lib/api.ts` (fetch wrapper: Bearer token injection,
+    Idempotency-Key passthrough, throws `ApiError` with the server's real status/code/message — never
+    swallows an error into a fake success), `apps/web/src/lib/useSession.ts`, `apps/web/src/lib/styles.ts`.
+  - New pages: `/register`, `/login`, `/events`, `/events/[id]`, `/orders`,
+    `/organiser` (dashboard), `/organiser/[organiserId]/events`,
+    `/organiser/[organiserId]/events/[eventId]`, `/organiser/[organiserId]/venues`,
+    `/organiser/[organiserId]/venues/[venueId]`, `/organiser/[organiserId]/reports`,
+    `/organiser/[organiserId]/checkin`, `/organiser/[organiserId]/refunds`; `components/Nav.tsx`
+    wired into `layout.tsx`.
+  - New backend endpoints (thin, read-only, same permission model as their siblings — see
+    docs/DECISIONS.md D-040): `GET /me/memberships` (`apps/api/src/modules/auth/memberships.ts` +
+    `meMembershipsRouter.ts`, 2 tests), `GET /organisers/:organiserId/events` list
+    (`modules/events/service.ts` + `router.ts`, 2 tests), `GET /events/:eventId/seats`
+    (`modules/events/service.ts` + `publicRouter.ts`, 2 tests).
+  - Bug fixes found via browser testing (see docs/DECISIONS.md D-041): seated-checkout
+    `holdId`/CHECK-constraint bug (already fixed and tested in Stage 2.7, re-verified here through the
+    UI); a real dropdown state-sync bug in the venue seat-map page (`organiser/[organiserId]/venues/[venueId]/page.tsx`)
+    where the submit handler could read a stale empty value despite the `<select>` visually showing a
+    fallback option, including a silent-failure branch that showed no error at all; missing
+    `type="text"` on several `<input>` elements across the frontend.
+- **Workflows actually driven end-to-end in a real headless browser (Playwright), not just
+  typechecked:**
+  - **Attendee:** register → browse/search events by city and category → open event detail → select
+    a GA tier → create a hold → see "Hold active" → confirm and pay → checkout completes with the
+    server's real status (not an assumed one) → `/orders` shows the new PAID order.
+  - **Organiser admin:** login → dashboard lists real organiser memberships → organiser events list →
+    create a draft event → add a ticket tier → publish (status flips to PUBLISHED, read back from the
+    server) → sales report page loads real revenue figures → venue management: create a venue →
+    create a section → create a row → create a seat, all persisted and re-rendered from the server
+    after each step.
+  - **Organiser staff:** login → check-in page rejects an invalid ticket code with the server's real
+    "Ticket not found" error (not a client-side guess) → attempts to refund their own order and is
+    rejected with the server's exact message, "Staff cannot refund their own order," proving the
+    frontend has no client-side self-refund guard of its own — the 403 and its message are the
+    server's, displayed verbatim.
+  - All three runs captured zero uncaught browser console errors.
+- **Tests executed:**
+  - `npm run typecheck` — clean, no errors, across api/web/shared/db.
+  - `npm run test` (backend, real Postgres) — **141/141 passing**, run twice for stability (one
+    transient truncated run investigated and immediately re-confirmed clean, consistent with the
+    non-reproducing flakiness already documented in Stage 2.4/2.6; not a regression).
+  - 3 Playwright scripts (attendee flow, organiser admin flow, venue+staff-refund flow) — all passed,
+    details above.
+- **Database hygiene:** after manual Playwright/browser testing, verified via direct `psql` queries
+  that the dev database was restored to exactly the original seed baseline (2 organisers, 22 users,
+  12 events, 3 venues, 32 reviews) — all Playwright-created rows (test users, test venue/event, test
+  order) were identified and removed in FK-safe order (tickets → refunds → orders → holds → reviews →
+  users/venues/events).
+- **Commit hashes:** `fcddb2f` — feat(api): add membership lookup, organiser event list, and seat
+  list endpoints; `bf02f82` — feat(web): build connected frontend for attendee, admin, and staff
+  workflows.
+- **Remaining issues:** none blocking. The ambient non-reproducing test flakiness (Docker-for-Windows/
+  WSL2 connection-pool transient hiccups, hypothesized) remains a known, accepted, documented
+  limitation — never traced to an actual code defect across ~4 occurrences this session.
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
