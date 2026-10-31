@@ -318,7 +318,7 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 - **Verification:** `npm run typecheck` clean (4/4 workspaces). `npm run test` 85/85, repeated twice
   for concurrency-test stability. `prisma migrate status` unchanged (no schema drift). DB confirmed
   empty after the run.
-- **Commit hash:** _pending — recorded at the end of this continuous session's checkpoints._
+- **Commit hash:** `c7c41ba` — feat(api): implement holds with atomic concurrency guarantees.
 - **Deliberate simplifications (see docs/DECISIONS.md D-023–D-026):** Idempotency-Key is required,
   not merely accepted. No BullMQ-scheduled sweeper yet — lazy expiry, triggered opportunistically at
   hold-creation and checkout time, fully satisfies the PDF's "lazily on read or sweeper" requirement
