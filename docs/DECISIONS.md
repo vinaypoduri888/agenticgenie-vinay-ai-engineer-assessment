@@ -453,4 +453,46 @@ Important architecture/implementation decisions, in plain language, for intervie
   several smaller requests. Combined with "one active hold per user per event," this means the
   cumulative check mostly matters against *already-purchased* tickets from a prior order.
 
+### D-027: Vitest runs test files sequentially — one shared real Postgres, not mocked
+
+- **Decision:** `fileParallelism: false` in `apps/api/vitest.config.ts`.
+- **Why we chose it:** Vitest's default parallel-file execution gives each file its own worker
+  process, each opening its own Prisma connection pool against the *same* real Postgres container
+  (deliberately not mocked, per the instruction to use real Postgres for correctness/concurrency
+  tests). During Stage 2.4 this surfaced as one intermittent failure in a full-suite run that didn't
+  reproduce running the same file alone — consistent with transient connection-pool contention
+  across simultaneously-running files, not a product bug (confirmed by 5 consecutive clean runs
+  after the change). A flaky suite is a real cost for a graded submission; trading some wall-clock
+  time (≈36s vs ≈22s) for a deterministically green `npm test` is the right trade here.
+- **Trade-off:** slower CI/local runs. Tests *within* a file that intentionally fire many concurrent
+  requests (the 50-seat and 200-GA-buyer tests) are unaffected — that concurrency is the thing being
+  tested and still happens via `Promise.all` inside one file.
+
+### D-028: A declined order is retryable, not terminal
+
+- **Decision:** Phase 1 of checkout treats `Order.status === 'DECLINED'` the same as
+  `PENDING_PAYMENT` — both fall through to create a fresh `Payment` attempt. Only `PAID`,
+  `PARTIALLY_REFUNDED`, and `REFUNDED` are treated as "already resolved, nothing more to do."
+- **Why this needed fixing:** the first implementation treated *any* non-`PENDING_PAYMENT` order as
+  terminal, which incorrectly blocked a legitimate "retry with a different card" flow after a clean
+  decline — caught by a test that declines, then retries with a fresh Idempotency-Key and expects
+  success. Since `Order.holdId` is unique, a retry on the same hold *must* reuse the same `Order`
+  row (never a second `Order`) — "retryable" means "create another `Payment` attempt against the
+  existing order," not "create a new order."
+
+### D-029: Lazy-expiry-at-checkout must commit in its own transaction, separate from Phase 1's
+
+- **Decision:** `checkout.ts`'s Phase 1 runs the hold's lazy-expiry check (`expireHold`) in its own
+  `prisma.$transaction` *before* opening Phase 1's main transaction (event lock, order/payment
+  creation), rather than inline inside that main transaction.
+- **Why this needed fixing:** the first implementation called `expireHold` inside Phase 1's single
+  transaction, then threw `HOLD_EXPIRED` when the hold turned out to be expired — but throwing
+  inside a `prisma.$transaction` callback rolls back *everything* in that transaction, including the
+  inventory release `expireHold` had just performed a moment earlier. The 409 response was correct;
+  the inventory was never actually released. Caught by a test asserting `remainingQuantity` was
+  fully restored after an expired-hold checkout attempt — it reported the pre-expiry value, revealing
+  the rollback. This is a sharper, more general version of the same lesson as D-025's "safe to
+  discard and retry" reasoning: a side effect you want to *keep* can never live in the same
+  transaction as a throw you use to *reject* the overall request.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->

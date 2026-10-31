@@ -108,13 +108,20 @@ export async function createTestTicketTier(
 export async function resetFixtures(): Promise<void> {
   if (createdOrganiserIds.length > 0) {
     const organiserId = { in: createdOrganiserIds };
+    const eventWhere = { organiserId };
     // Event/Venue -> Organiser are onDelete: Restrict, so descendants go
-    // first. Event cascades away its own TicketTiers/EventSeats/etc.; Venue
-    // cascades away its Sections/Rows/Seats. Scoped by organiserId (not
-    // individually-tracked row ids) so this also cleans up anything created
-    // through the real HTTP endpoints under test, not just direct
-    // fixture-helper inserts.
-    await prisma.event.deleteMany({ where: { organiserId } });
+    // first. Ticket/Refund -> Order and Order -> Event/Hold are ALSO
+    // Restrict, so Orders (and what references them) must be cleared before
+    // Event can be deleted — otherwise Event's own cascade to Hold is
+    // blocked by Order's Restrict reference to that same Hold. Event itself
+    // still cascades away its TicketTiers/EventSeats; Venue cascades away
+    // its Sections/Rows/Seats. Scoped by organiserId (not individually-
+    // tracked row ids) so this also cleans up anything created through the
+    // real HTTP endpoints under test, not just direct fixture-helper inserts.
+    await prisma.ticket.deleteMany({ where: { event: eventWhere } });
+    await prisma.refund.deleteMany({ where: { order: { event: eventWhere } } });
+    await prisma.order.deleteMany({ where: { event: eventWhere } });
+    await prisma.event.deleteMany({ where: eventWhere });
     await prisma.venue.deleteMany({ where: { organiserId } });
     await prisma.organiserMembership.deleteMany({ where: { organiserId } });
     await prisma.organiser.deleteMany({ where: { id: { in: createdOrganiserIds } } });

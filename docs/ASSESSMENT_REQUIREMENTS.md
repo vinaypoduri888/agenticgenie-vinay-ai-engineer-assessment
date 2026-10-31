@@ -34,8 +34,8 @@ existing is not enough.
 | W4 | Event detail + live availability | Tested — ticket-tier remaining counts + overall seat availability summary (per-section breakdown deferred, see docs/DECISIONS.md) |
 | W5 | Seat/GA holds | Tested — `apps/api/src/modules/holds/` |
 | W6 | Hold expiry + inventory release | Tested — lazy expiry, opportunistic sweep (see DECISIONS D-025) |
-| W7 | Checkout via fake payment provider (succeed/decline/timeout configurable) | Not started |
-| W8 | Paid orders + ticket generation | Not started |
+| W7 | Checkout via fake payment provider (succeed/decline/timeout configurable) | Tested — `apps/api/src/modules/orders/checkout.ts` |
+| W8 | Paid orders + ticket generation | Tested |
 | W9 | Attendee order/ticket history | Not started |
 | W10 | Full/partial refunds | Not started |
 | W11 | Ticket check-in (one-time, concurrency-safe) | Not started |
@@ -52,8 +52,8 @@ existing is not enough.
 | E3 | `GET /events/:id` | Tested |
 | E4 | `POST /holds` `{event_id, seat_ids[] | tier_id+qty}` → 201/409 | Tested |
 | E5 | `DELETE /holds/:id` | Tested |
-| E6 | `POST /orders` `[Idem-Key]` `{hold_id}` → 201 paid / 402 declined / 409 expired | Not started |
-| E7 | `GET /me/orders?cursor=` | Not started |
+| E6 | `POST /orders` `[Idem-Key]` `{hold_id}` → 201 paid / 402 declined / 409 expired | Tested (also 202 for an unresolved timeout, an extension — see DECISIONS D-012) |
+| E7 | `GET /me/orders?cursor=` | Tested |
 | E8 | `POST /orders/:id/refund` `[Idem-Key]` `{ticket_ids[]?, reason}` → 200/403/404/409 | Not started |
 | E9 | `POST /tickets/:code/checkin` → 200/409/404 | Not started |
 | E10 | `POST /events` · `PATCH /events/:id` · `POST /events/:id/cancel` (org admin) | In progress — create/update/publish implemented under `/organisers/:organiserId/events`; cancel deliberately deferred (see W2) |
@@ -85,7 +85,7 @@ Error shape: `{"error": {"code": "...", "message": "...", "request_id": "..."}}`
 | A1 | Fresh clone → running seeded app in ≤5 commands | README followed literally | Not started |
 | A2 | 50 parallel holds on one seat → 1 success/49 conflicts; 200 buyers on 100 GA → exactly 100 sold | Automated concurrency test | Verified — `apps/api/test/holds/holds.test.ts` |
 | A3 | Expired holds release inventory; checkout on expired hold fails cleanly | Automated test, fake clock | Verified — `apps/api/test/holds/holds.test.ts` |
-| A4 | Idempotency: replayed order/refund → no double charge/refund | Automated test | Not started |
+| A4 | Idempotency: replayed order/refund → no double charge/refund | Automated test | Tested (orders) — `apps/api/test/orders/checkout.test.ts`; refunds land in Stage 2.5 |
 | A5 | All role rules enforced server-side | Tests + curl | Not started |
 | A6 | Isolation: organiser↔organiser, attendee↔attendee across list/get/refund/report/audit | Automated tests | Not started |
 | A7 | Cursor pagination stable under concurrent inserts | Automated test | Tested — `apps/api/test/events/catalogue.test.ts` (event catalogue only so far; `/me/orders`, reviews, and audit pagination reuse the same cursor helper once those endpoints exist) |

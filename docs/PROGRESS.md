@@ -325,4 +325,58 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   and closes the realistic inventory-idle gap without queue/worker plumbing; `sweepAllExpiredHolds()`
   is written and tested, ready to attach to a scheduled job later.
 
+## Stage 2.4 — Orders, payments, and idempotency (2026-10-31)
+
+- **Task:** `POST /orders` (three-phase checkout against the deterministic fake payment provider),
+  `GET /me/orders`. The architecturally hardest piece of Part A — the full claim/replay/stale-
+  takeover idempotency protocol and the phase split designed during Stage 2's schema review.
+- **Status:** Implemented and tested. No schema changes.
+- **Files:** `apps/api/src/modules/payments/fakeProvider.ts` (in-memory, externalRef-keyed ledger —
+  SUCCESS/DECLINE/TIMEOUT, with `timeout_then_success`/`timeout_then_decline` resolving
+  synchronously for deterministic tests); `apps/api/src/modules/orders/{schemas,checkout,service,
+  router}.ts`; `apps/api/src/app.ts` (mounted `/orders`, `/me/orders`); `apps/api/test/orders/
+  checkout.test.ts` (11 tests); `apps/api/vitest.config.ts` (`fileParallelism: false` — see
+  D-027); `apps/api/test/helpers/fixtures.ts` (cleanup extended for Ticket/Refund/Order — see
+  below).
+- **Tests (96 passing total, 11 new this stage):** full success path (order PAID, correct ticket
+  count, hold CONVERTED, `paidByPaymentId` set, `Payment.externalRef` verified to equal the owning
+  `IdempotencyRecord.id`); `Order.holdId` uniqueness enforced at the DB level even bypassing the
+  service layer; decline path (hold stays ACTIVE, zero tickets issued, inventory untouched) and a
+  successful retry afterward with a fresh key; **timeout-then-takeover**: first attempt gets 202 with
+  `Payment.TIMED_OUT`, forced-stale via direct `updatedAt` manipulation (no real 30s wait), retry
+  with the *same* key succeeds via the provider's already-resolved ledger entry — exactly one ticket
+  set issued, two `Payment` rows total (one per attempt, for history), the original stays
+  `TIMED_OUT` untouched, `paidByPaymentId` points at the second (authoritative) attempt; a genuinely
+  concurrent non-stale duplicate gets 409 `REQUEST_IN_PROGRESS`; idempotent replay (same key+body →
+  identical order, tickets not re-issued); same key + different hold → 422; checking out someone
+  else's hold → 404; an expired hold is rejected and its inventory is provably restored; starting
+  checkout against an already-cancelled event → 409 (full cancelled-mid-flight race deferred to
+  Stage 2.5 where a real cancel endpoint exists to interleave against realistically).
+- **Three real bugs caught and fixed while building this (all by the test suite, not after):**
+  1. `Payment.externalRef` was wired to the *user's* id instead of the owning
+     `IdempotencyRecord.id` — would have made every order from the same user share one ledger
+     entry in the fake provider, corrupting the dedup mechanism entirely. Caught before running any
+     tests, by re-reading the draft against the design (D-012).
+  2. Phase 1 treated any non-`PENDING_PAYMENT` order as terminal, incorrectly blocking a legitimate
+     retry after a decline — fixed per D-028.
+  3. The lazy-expiry-at-checkout release was performed inside the same transaction as the 409 throw
+     that rejects an expired-hold checkout, so the whole transaction (release included) rolled back —
+     fixed per D-029.
+  4. (Test infra, not product code) Vitest's parallel file execution against one real Postgres
+     container produced one intermittent cross-file failure in a full-suite run — fixed per D-027
+     (`fileParallelism: false`), confirmed stable across 5 consecutive full runs afterward.
+  5. (Test infra) `resetFixtures()` needed Ticket/Refund/Order deletion added *before* Event deletion
+     — Order/Ticket/Refund all have `Restrict` relations that blocked Event's own cascade to Hold.
+     Same category of bug as D-022, now covering the full order lifecycle's tables.
+- **Verification:** `npm run typecheck` clean. `npm run test` 96/96, run 5 times total for stability.
+  `prisma migrate status` unchanged. DB confirmed empty after a clean run (debris from the
+  bug-fixing iterations manually cleared and confirmed non-growing beforehand, same method as
+  Stage 2.2/2.3).
+- **Commit hash:** _pending._
+- **Scope notes:** Tickets are issued only on `SUCCESS`; never on `DECLINE` or `TIMEOUT` (verified by
+  test). The deeper "event cancelled while a checkout's payment call is genuinely in flight"
+  interleaving is implemented (Phase 3 re-checks event status under its own lock and auto-refunds a
+  late success) but not yet end-to-end tested with a real concurrent cancellation request — that
+  lands with Stage 2.5's cancellation endpoint.
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
