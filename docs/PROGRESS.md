@@ -584,4 +584,54 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
   WSL2 connection-pool transient hiccups, hypothesized) remains a known, accepted, documented
   limitation — never traced to an actual code defect across ~4 occurrences this session.
 
+---
+
+## Stage 2.9 — Consolidated Part A acceptance-testing pass (2026-11-01)
+
+- **Task:** per the "Complete Part A" mega-prompt's Section 9, run an explicit consolidated
+  acceptance pass over A1–A8 rather than relying on each stage's own local verification, and bring
+  `docs/ASSESSMENT_REQUIREMENTS.md` (which had drifted out of date since ~Stage 2.2) back in line
+  with what the code and tests actually prove.
+- **Status:** Done. A1–A8 all independently re-verified; two real coverage gaps found and closed
+  (pagination tests, requirements-doc staleness); one real but out-of-scope gap found and
+  consciously left as a documented limitation rather than fixed (event `ON_SALE`/`SOLD_OUT`/
+  `COMPLETED` HTTP transitions — see docs/DECISIONS.md D-042).
+- **A1 (fresh clone → running seeded app in ≤5 commands) — verified for real, not just by
+  re-reading the README:** cloned the repo into an isolated temp directory, remapped only the
+  throwaway clone's Postgres/Redis host ports to avoid colliding with the main repo's running
+  containers, and ran the README's own 4 chained commands end to end. Result: API came up healthy,
+  `/auth/login` succeeded for a seeded admin, `/events` returned real seeded rows. Fully torn down
+  afterward (`docker compose down -v` + temp directory deleted); confirmed the main repo's own
+  containers and git state were untouched throughout.
+- **A5/A6 (role rules, isolation) — confirmed already covered**, just never reflected in the
+  requirements doc: `require-organiser.test.ts` plus per-resource 403/404 tests across venues,
+  events, inventory, reports, audit, refunds, check-in, and cancellation.
+- **A7 (pagination) — real gap found and closed.** Only the event catalogue had a cursor-stability
+  test; `/me/orders`, event reviews, and the organiser audit feed share the same keyset-pagination
+  helper but had none. Added the identical no-duplicates/no-skips-under-concurrent-insert test to
+  all three (`apps/api/test/orders/my-orders.test.ts` — new file, also covers basic
+  caller-sees-only-their-own-orders isolation; `reviews.test.ts`; `audit.test.ts`).
+- **D4 gap found and consciously scoped out, not fixed:** `statusTransitions.ts` defines
+  `PUBLISHED→ON_SALE→SOLD_OUT→COMPLETED`, fully unit-tested, but no HTTP endpoint drives any of
+  those three transitions, and nothing auto-derives `SOLD_OUT` from inventory. Checked against the
+  PDF's actual required workflow list (W2) and A1–A8: none require it, and checkout already treats
+  `PUBLISHED`/`ON_SALE` identically. Documented honestly in `README.md`'s "Known limitations" and
+  `docs/DECISIONS.md` D-042 rather than silently left unexplained or built as unplanned scope creep
+  this late in Part A.
+- **docs/ASSESSMENT_REQUIREMENTS.md corrected**: D1, D5, D6, D7, D8, D9, W2, A1, A4, A5, A6, A7,
+  DL1, DL2, DL4 all moved from stale "Not started"/partial statuses to accurate
+  Tested/Verified/Implemented statuses, each citing the real file(s) that prove it.
+- **README.md refreshed**: status banner now says Part A complete (not "frontend remaining"),
+  added the 3 new endpoints, corrected the Next.js library-rationale bullet to describe what was
+  actually built (client components + localStorage JWT, not server components), and refreshed
+  "Known limitations" to current reality.
+- **Tests executed:** full suite re-run after adding the 3 pagination tests — **145/145 passing**
+  (141 + 3 new + 1 incidental from the new `my-orders.test.ts` file's first basic-isolation test).
+  `npm run typecheck` clean across all 4 workspaces.
+- **Commit hashes:** `fb78c65` — test(api): close the pagination coverage gap on /me/orders,
+  reviews, and audit; `c9c1022` — docs: correct Part A requirements checklist and README to
+  verified reality.
+- **Remaining issues:** none blocking Part A completion. Part B and Part C have not been started,
+  per the mega-prompt's explicit instruction to stop here and wait for independent Part A review.
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->
