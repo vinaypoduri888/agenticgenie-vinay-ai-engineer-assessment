@@ -1,6 +1,9 @@
+import { randomUUID } from "node:crypto";
+import { prisma } from "@agenticgenie/db";
 import request from "supertest";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/app.js";
+import { writeAuditLog } from "../../src/lib/audit.js";
 import { signAccessToken } from "../../src/modules/auth/jwt.js";
 import {
   createTestEvent,
@@ -166,6 +169,42 @@ describe("audit log access", () => {
       const page2EntityIds = page2.body.items.map((e: { entityId: string }) => e.entityId);
       expect(page2EntityIds).toContain(seeded[2].id);
       expect(page2EntityIds).toContain(inserted.id);
+    });
+  });
+
+  describe("transactional atomicity", () => {
+    it("rolls back the audit write along with the rest of the transaction when a later statement fails", async () => {
+      // writeAuditLog's signature only accepts a Prisma.TransactionClient
+      // (see lib/audit.ts), so every one of its 19 real call sites is
+      // structurally forced to write inside the same transaction as the
+      // business mutation it records. This directly exercises that
+      // guarantee with a forced failure *after* the audit write, confirming
+      // Postgres rolls both back together — not just that the call sites
+      // happen to look right by convention.
+      const organiser = await createTestOrganiser();
+      const entityId = randomUUID();
+      const auditCountBefore = await prisma.auditLog.count({ where: { entityId } });
+
+      await expect(
+        prisma.$transaction(async (tx) => {
+          await writeAuditLog(tx, {
+            actorUserId: null,
+            organiserId: organiser.id,
+            action: "TEST_ACTION",
+            entityType: "Test",
+            entityId,
+            requestId: "test-atomicity",
+          });
+          // Force the transaction to fail *after* the audit write has
+          // already been sent — a duplicate primary key is a real
+          // constraint violation, not a thrown JS error the ORM would
+          // never see in production.
+          await tx.organiser.create({ data: { id: organiser.id, name: "duplicate id, must fail" } });
+        }),
+      ).rejects.toThrow();
+
+      const auditCountAfter = await prisma.auditLog.count({ where: { entityId } });
+      expect(auditCountAfter).toBe(auditCountBefore); // the audit row never persisted
     });
   });
 });

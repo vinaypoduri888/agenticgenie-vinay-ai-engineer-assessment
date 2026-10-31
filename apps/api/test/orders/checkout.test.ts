@@ -256,6 +256,38 @@ describe("checkout — timeout and stale takeover", () => {
 });
 
 describe("checkout — idempotency", () => {
+  it("a genuinely concurrent duplicate checkout (same key, fired together) charges and issues exactly once", async () => {
+    const { user, hold } = await setupHold({ quantity: 1 });
+    const key = randomUUID();
+    const body = { holdId: hold.id };
+
+    // Fired together via Promise.all, racing for real on the
+    // (userId, key, endpoint) unique constraint in checkout.ts's claimOrReplay
+    // — not simulated by pre-inserting a PROCESSING row. This is the
+    // highest-stakes path in the app: a genuine double-charge or
+    // double-ticket-issue here would be a real financial defect.
+    const [a, b] = await Promise.all([
+      request(app).post("/orders").set("Authorization", authFor(user.id)).set("Idempotency-Key", key).send(body),
+      request(app).post("/orders").set("Authorization", authFor(user.id)).set("Idempotency-Key", key).send(body),
+    ]);
+
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+    // The loser either replays the winner's 201 or gets a clean 409 if it
+    // arrived while the winner was still mid-flight — never a second order.
+    expect(statuses[0]).toBe(201);
+    expect(statuses[1] === 201 || statuses[1] === 409).toBe(true);
+
+    const orders = await prisma.order.findMany({ where: { holdId: hold.id } });
+    expect(orders).toHaveLength(1); // exactly one order, never two
+    expect(orders[0]!.status).toBe("PAID");
+
+    const payments = await prisma.payment.findMany({ where: { orderId: orders[0]!.id } });
+    expect(payments).toHaveLength(1); // charged exactly once, not twice
+
+    const tickets = await prisma.ticket.findMany({ where: { orderId: orders[0]!.id } });
+    expect(tickets).toHaveLength(1); // issued exactly once, not twice
+  });
+
   it("replays the exact original result for the same key and body", async () => {
     const { user, hold } = await setupHold({ quantity: 1 });
     const key = randomUUID();

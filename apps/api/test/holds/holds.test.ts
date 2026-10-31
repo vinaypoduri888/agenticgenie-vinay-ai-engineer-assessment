@@ -244,6 +244,41 @@ describe("hold expiry", () => {
     expect(holdAfter.status).toBe("EXPIRED");
   });
 
+  it("sweeping many expired holds concurrently (two overlapping sweeps racing for real) never double-releases inventory", async () => {
+    const { event } = await setupPublishedEvent();
+    const tier = await createTestTicketTier(event.id, { totalQuantity: 100 });
+
+    const users = await Promise.all(Array.from({ length: 20 }, () => createTestUser()));
+    const holds = await Promise.all(
+      users.map((user) =>
+        request(app)
+          .post("/holds")
+          .set("Authorization", authFor(user.id))
+          .set("Idempotency-Key", randomUUID())
+          .send({ eventId: event.id, tierId: tier.id, quantity: 2 }),
+      ),
+    );
+    expect(holds.every((h) => h.status === 201)).toBe(true);
+
+    await prisma.hold.updateMany({
+      where: { eventId: event.id, status: "ACTIVE" },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    // Two sweeps launched together — unlike the sequential first/second
+    // sweep above, these genuinely overlap and race on the same 20 rows via
+    // Promise.all, exercising expireHold's `WHERE status = 'ACTIVE'`
+    // conditional-update guard for real concurrent contention, not just
+    // "nothing left after the first pass."
+    const [countA, countB] = await Promise.all([sweepAllExpiredHolds(), sweepAllExpiredHolds()]);
+
+    expect(countA + countB).toBe(20); // every hold expired exactly once, split across the two racing sweeps
+    const tierAfter = await prisma.ticketTier.findUniqueOrThrow({ where: { id: tier.id } });
+    expect(tierAfter.remainingQuantity).toBe(100); // fully restored, not double-credited
+    const stillActive = await prisma.hold.count({ where: { eventId: event.id, status: "ACTIVE" } });
+    expect(stillActive).toBe(0);
+  }, 15_000);
+
   it("an expired hold cannot be used for checkout (lazy-expiry via getUsableHoldOrThrow)", async () => {
     const { event } = await setupPublishedEvent();
     const tier = await createTestTicketTier(event.id);
@@ -269,6 +304,41 @@ describe("hold expiry", () => {
 });
 
 describe("hold idempotency", () => {
+  it("a genuinely concurrent duplicate request (same key, fired together) still produces exactly one hold", async () => {
+    const { event } = await setupPublishedEvent();
+    const tier = await createTestTicketTier(event.id, { totalQuantity: 10 });
+    const user = await createTestUser();
+    const key = randomUUID();
+    const body = { eventId: event.id, tierId: tier.id, quantity: 1 };
+
+    // Unlike the sequential replay test below, this fires both requests
+    // together (Promise.all) so they race for real on the DB's unique
+    // (userId, key, endpoint) constraint — exercising the actual P2002
+    // handling path in lib/idempotency.ts, not just the COMPLETED-replay
+    // branch a sequential test would hit.
+    const [a, b] = await Promise.all([
+      request(app).post("/holds").set("Authorization", authFor(user.id)).set("Idempotency-Key", key).send(body),
+      request(app).post("/holds").set("Authorization", authFor(user.id)).set("Idempotency-Key", key).send(body),
+    ]);
+
+    // Both responses must agree on the outcome: either both see the same
+    // successful hold (one raced in as the owner, the other replayed it),
+    // or the loser gets a clean 409 if it arrived while the winner was still
+    // mid-flight. What must never happen is two different hold ids or a
+    // double inventory decrement.
+    const statuses = [a.status, b.status].sort((x, y) => x - y);
+    expect(statuses[0]).toBe(201);
+    expect(statuses[1] === 201 || statuses[1] === 409).toBe(true);
+    if (a.status === 201 && b.status === 201) {
+      expect(a.body.id).toBe(b.body.id);
+    }
+
+    const holds = await prisma.hold.count({ where: { eventId: event.id, userId: user.id } });
+    expect(holds).toBe(1);
+    const tierAfter = await prisma.ticketTier.findUniqueOrThrow({ where: { id: tier.id } });
+    expect(tierAfter.remainingQuantity).toBe(9); // decremented exactly once, not twice
+  });
+
   it("replays the original result for the same key and same payload", async () => {
     const { event } = await setupPublishedEvent();
     const tier = await createTestTicketTier(event.id, { totalQuantity: 10 });
