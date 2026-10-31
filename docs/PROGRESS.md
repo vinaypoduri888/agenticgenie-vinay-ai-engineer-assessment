@@ -283,7 +283,7 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
     *failed* runs during debugging (before the cleanup fix) — confirmed via a repeat run that counts
     were static, not growing, before clearing them, so the leftover was debugging debris, not an
     ongoing leak.
-- **Commit hash:** _pending — see next update._
+- **Commit hash:** `0c9d6be` — feat(api): implement venue, event, and inventory management.
 - **Remaining issues / scope notes:** Event cancellation is deliberately not implemented (see D-019
   — needs holds/orders to resolve correctly, which don't exist yet). `PUBLISHED→ON_SALE→SOLD_OUT`
   transitions aren't exposed over HTTP yet (the rule exists and is tested; no endpoint calls it
