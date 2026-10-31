@@ -634,4 +634,53 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 - **Remaining issues:** none blocking Part A completion. Part B and Part C have not been started,
   per the mega-prompt's explicit instruction to stop here and wait for independent Part A review.
 
+---
+
+## Stage 2.10 — Independent Part A audit and corrections (2026-11-01)
+
+- **Task:** candidate requested a skeptical, independent re-audit of the "Part A complete" report at
+  `6c38cc8` — not a restatement of the prior report, but real command execution and DB-state
+  inspection to verify or refute every claim. Full detail, evidence table, and verdict:
+  [docs/PART_A_FINAL_AUDIT.md](PART_A_FINAL_AUDIT.md).
+- **Status:** Done. All A1–A8 independently re-verified PASS. Three real test-coverage gaps found
+  and closed with new regression tests (concurrent hold-expiry sweeping, concurrent duplicate
+  hold/checkout requests, audit-log transactional-atomicity). One real frontend gap found and closed
+  (no admin UI for audit-log visibility). One real but non-mandatory domain-model gap re-confirmed
+  and left as a documented limitation (event `ON_SALE`/`SOLD_OUT`/`COMPLETED` HTTP transitions — see
+  D-042, independently re-checked, not overturned). One test-infrastructure footgun found and fixed
+  (`dist/**` double-counting the Vitest suite after a build).
+- **A1 re-verified for real, in full isolation**, after discovering and resolving a genuine process
+  hygiene issue: a stray `npm run dev` process tree from earlier in this session was still running,
+  undetected, on ports 3000/4000 — contradicting the prior report's claim that dev servers were
+  stopped. This initially caused the fresh-clone test to silently talk to the wrong (main-repo)
+  database for one round of verification, caught only by cross-checking a returned event id against
+  both databases directly via `psql`. Identified the stray processes by `CommandLine` (not just port
+  occupancy) before stopping them, then re-ran the clone's servers on fully dedicated ports (4010/3010)
+  for unambiguous evidence.
+- **New regression tests added** (all passing, re-run 3x for stability):
+  `apps/api/test/holds/holds.test.ts` (genuinely concurrent duplicate hold request; genuinely
+  concurrent hold-expiry sweep), `apps/api/test/orders/checkout.test.ts` (genuinely concurrent
+  duplicate checkout), `apps/api/test/audit/audit.test.ts` (audit-write transactional rollback).
+  Suite grew from 145 to 149 passing tests.
+- **One real bug found — in the new tests' own assertions, not in product code:** `[status_a,
+  status_b].sort()` defaults to lexicographic string sort; the index-based assertions assumed
+  descending order. Confirmed the actual application behavior was correct on every run (raw response
+  bodies captured and inspected) before fixing the test. See D-044.
+- **New frontend page:** `apps/web/src/app/organiser/[organiserId]/audit/page.tsx` — the admin
+  "audit visibility" workflow had no UI before this (API-only), found during the frontend-workflow
+  re-verification. Verified live via Playwright: admin sees real entries, staff sees the real server
+  403 for the organiser-wide feed (not hidden or faked).
+- **Test-infra fix:** `apps/api/vitest.config.ts` now explicitly excludes `dist/**` — a stray build
+  artifact from this audit's own `npm run build` verification step was silently doubling the whole
+  suite's file/test count. See D-043.
+- **Final verification, after all corrections:** `npx vitest run` → **149/149 passing**; `npm run
+  typecheck` → clean across all 4 workspaces; `npm run build` → clean for both `apps/api` and
+  `apps/web` (15 routes, including the new audit page); `prisma migrate status` → up to date;
+  `npm run db:seed` run twice → identical counts (2 organisers, 22 users, 12 events, 3 venues, 32
+  reviews), confirming idempotency; database confirmed restored to this exact baseline after all
+  audit-created test data (throwaway users, venues, events, orders) was cleaned up.
+- **Commit hashes:** recorded in the next commit(s) below this entry.
+- **Remaining issues:** none blocking. See docs/PART_A_FINAL_AUDIT.md §10 for the full, honest list
+  of non-mandatory limitations. Part B and Part C still not started, per standing instruction.
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->

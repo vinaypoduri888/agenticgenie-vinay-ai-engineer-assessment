@@ -691,4 +691,49 @@ real running API and seeded database — not just typechecked or eyeballed:
   is a small admin "mark on sale" action plus an inventory-service hook that flips `SOLD_OUT`
   atomically alongside the last unit's sale, inside the same transaction that decrements it.
 
+### D-043: Vitest explicitly excludes `dist/**`, not just relying on its own defaults
+
+- **Decision:** `apps/api/vitest.config.ts` now sets `exclude: ["**/node_modules/**", "**/dist/**"]`
+  explicitly.
+- **Why we chose it:** found during the independent Part A audit's build-verification pass — running
+  `npm run build` (tsc) then `npm run test` silently doubled the whole suite (42 files / 294 tests
+  instead of 21 / 149), because compiled test files under `dist/test/**` were also being discovered
+  and run. `dist/` is gitignored and never present in a fresh clone or CI, so this never affected a
+  graded run from a clean checkout, but it's a real local-dev footgun — exactly the kind of
+  confusing, misleading test count a reviewer could hit by following the README's own mention that
+  `build`/`start` scripts exist and work.
+- **Trade-off:** none — this only narrows what Vitest looks at, with no behavior change for the
+  normal `test/**` suite.
+
+### D-044: Three "already covered" acceptance criteria got real concurrent regression tests
+
+- **Decision:** added three genuinely-concurrent (`Promise.all`, not simulated) regression tests
+  during the independent Part A audit: two expired holds swept by two overlapping
+  `sweepAllExpiredHolds()` calls racing for real (A3), and a same-idempotency-key hold request and
+  order/checkout request each fired as a true race rather than simulated via a pre-inserted
+  `PROCESSING` idempotency row (A4).
+- **Why we chose it:** the underlying code was already correctly designed (conditional
+  `UPDATE ... WHERE status = 'ACTIVE'`, and the unique-constraint-plus-retry-loop idempotency
+  pattern), but "designed to be race-safe" and "proven race-safe by a test that actually races it"
+  are different claims — the audit explicitly asked to verify "concurrent expiry processing" and
+  "concurrent duplicate requests" literally, and the existing tests only exercised the sequential or
+  simulated version of each. Closing this gap with new tests, rather than just asserting the design
+  is correct, is consistent with this project's standing rule to never claim a test passed unless it
+  actually ran and passed.
+- **A real bug was found and fixed in the process — but in the new tests, not the product.**
+  `[a.status, b.status].sort()` on two HTTP status codes defaults to JavaScript's lexicographic
+  string sort, which happens to still order a 201/409 pair correctly by coincidence (same digit
+  count, '2' < '4'), but the assertion `expect(statuses[1]).toBe(201)` had the index backwards
+  (ascending sort puts the smaller, successful code at index 0). The application's actual behaviour
+  (one 201, one 409, exactly once-charged/once-ticketed) was correct on every single run — confirmed
+  by writing the race's raw response bodies to a file and inspecting them directly before touching
+  any assertion. Fixed by sorting with an explicit numeric comparator and correcting the index
+  checks. A reminder that a failing new test is not automatically a product bug — verify which side
+  is wrong before "fixing" anything.
+- **Also added:** a direct regression test that `writeAuditLog` calls are rolled back along with
+  their enclosing transaction on a later failure (A8) — previously this was guaranteed only by
+  `writeAuditLog`'s type signature forcing every call site to pass a transaction client (verified by
+  `grep` across all 19 real call sites), never by a test that forces a real failure and checks the
+  row didn't survive.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->
