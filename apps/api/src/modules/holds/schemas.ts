@@ -1,6 +1,7 @@
 import { z } from "zod";
+import { withSnakeCaseAliases } from "../../lib/aliases.js";
 
-export const createHoldBodySchema = z
+const holdBodySchema = z
   .object({
     eventId: z.string().min(1),
     seatIds: z.array(z.string().min(1)).min(1).max(8).optional(),
@@ -14,4 +15,11 @@ export const createHoldBodySchema = z
     { message: "Provide either seatIds[] or tierId + quantity, not both and not neither" },
   );
 
-export type CreateHoldBody = z.infer<typeof createHoldBodySchema>;
+export const createHoldBodySchema = withSnakeCaseAliases(holdBodySchema, {
+  event_id: "eventId",
+  seat_ids: "seatIds",
+  tier_id: "tierId",
+  qty: "quantity",
+});
+
+export type CreateHoldBody = z.infer<typeof holdBodySchema>;

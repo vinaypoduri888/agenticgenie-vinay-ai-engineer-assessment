@@ -9,7 +9,7 @@ export const authRouter = Router();
 // login) — useful for a self-contained, testable auth system. Seed data
 // still inserts users directly for determinism.
 authRouter.post("/register", validateBody(registerBodySchema), async (req, res) => {
-  const result = await registerUser(req.body);
+  const result = await registerUser(req.body, req.requestId);
   res.status(201).json(result);
 });
 

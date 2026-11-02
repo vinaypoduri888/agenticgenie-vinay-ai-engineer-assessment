@@ -6,4 +6,8 @@ export const auditQuerySchema = z.object({
   cursor: z.string().min(1).optional(),
 });
 
+export const myAuditQuerySchema = auditQuerySchema.extend({
+  organiser_id: z.string().min(1).optional(),
+});
+
 export type AuditQuery = z.infer<typeof auditQuerySchema>;

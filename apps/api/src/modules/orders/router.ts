@@ -1,11 +1,14 @@
 import { Router } from "express";
 import { ApiError } from "../../lib/errors.js";
+import { env } from "../../env.js";
 import { validateBody, validateQuery } from "../../middleware/validate.js";
 import { requestRefundBodySchema } from "../refunds/schemas.js";
 import { requestRefund } from "../refunds/service.js";
 import { checkout } from "./checkout.js";
-import { createOrderBodySchema, myOrdersQuerySchema, paymentScenarioSchema, type MyOrdersQuery } from "./schemas.js";
-import { listMyOrders } from "./service.js";
+import { requireOrganiserMembership } from "../../middleware/requireOrganiser.js";
+import { createOrderBodySchema, myOrdersQuerySchema, organiserOrdersQuerySchema, paymentScenarioSchema, type MyOrdersQuery } from "./schemas.js";
+import { listMyOrders, listOrganiserOrders } from "./service.js";
+import { reconcileStuckCheckouts } from "./checkout.js";
 
 export const ordersRouter = Router();
 
@@ -18,7 +21,7 @@ ordersRouter.post("/", validateBody(createOrderBodySchema), async (req, res) => 
   // Test/demo-only escape hatch for deterministically exercising the fake
   // provider's SUCCESS/DECLINE/TIMEOUT paths — never a real payment
   // instrument, so this is safe to accept as a plain header.
-  const scenario = paymentScenarioSchema.parse(req.headers["x-payment-scenario"]);
+  const scenario = paymentScenarioSchema.parse(req.headers["x-payment-scenario"] ?? env.FAKE_PAYMENT_SCENARIO);
 
   const result = await checkout(
     { actorUserId: req.user!.id, requestId: req.requestId },
@@ -48,6 +51,16 @@ export const myOrdersRouter = Router();
 
 myOrdersRouter.get("/", validateQuery(myOrdersQuerySchema), async (req, res) => {
   const query = req.validatedQuery as MyOrdersQuery;
+  await reconcileStuckCheckouts({ userId: req.user!.id });
   const { items, nextCursor } = await listMyOrders(req.user!.id, query);
+  res.json({ items, next_cursor: nextCursor });
+});
+
+// Mounted at /organisers/:organiserId/orders.
+export const organiserOrdersRouter = Router({ mergeParams: true });
+
+organiserOrdersRouter.get("/", requireOrganiserMembership(), validateQuery(organiserOrdersQuerySchema), async (req, res) => {
+  const query = req.validatedQuery as MyOrdersQuery & { event_id?: string; q?: string };
+  const { items, nextCursor } = await listOrganiserOrders(req.membership!.organiserId, query);
   res.json({ items, next_cursor: nextCursor });
 });

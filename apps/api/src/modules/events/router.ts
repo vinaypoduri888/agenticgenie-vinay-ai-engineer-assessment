@@ -48,6 +48,16 @@ eventsRouter.post("/:eventId/publish", requireAdmin(), async (req, res) => {
   res.json(event);
 });
 
+eventsRouter.post("/:eventId/on-sale", requireAdmin(), async (req, res) => {
+  const event = await events.putEventOnSale(ctx(req), req.params.eventId as string);
+  res.json(event);
+});
+
+eventsRouter.post("/:eventId/complete", requireAdmin(), async (req, res) => {
+  const event = await events.completeEvent(ctx(req), req.params.eventId as string);
+  res.json(event);
+});
+
 eventsRouter.post("/:eventId/cancel", requireAdmin(), async (req, res) => {
   const result = await cancelEvent(ctx(req), req.params.eventId as string);
   res.json(result);

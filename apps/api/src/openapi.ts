@@ -1,15 +1,38 @@
 /**
- * Hand-written OpenAPI skeleton. Part A endpoints are added here as they're
- * implemented in later stages — kept as a plain literal (no codegen) so it's
- * easy to read and diff in review.
+ * Hand-written OpenAPI document, kept as a plain literal (no codegen) so it's
+ * easy to read and diff in review. Summary-level below the auth routes; the
+ * behaviour of each route is pinned down by its test suite.
  */
+function summarisedPaths(paths: Record<string, Record<string, string>>) {
+  return Object.fromEntries(
+    Object.entries(paths).map(([path, operations]) => [
+      path,
+      Object.fromEntries(
+        Object.entries(operations).map(([method, summary]) => [
+          method,
+          {
+            summary,
+            parameters: [...path.matchAll(/\{(\w+)\}/g)].map((match) => ({
+              name: match[1],
+              in: "path",
+              required: true,
+              schema: { type: "string" },
+            })),
+            responses: { default: { description: "See summary" } },
+          },
+        ]),
+      ),
+    ]),
+  );
+}
+
 export const openApiDocument = {
   openapi: "3.0.3",
   info: {
     title: "Agentic Genie Ticketing API",
-    version: "0.1.0",
+    version: "1.0.0",
     description:
-      "Multi-organiser event ticketing API. Endpoints beyond /health are added incrementally as Part A is implemented.",
+      "Multi-organiser event ticketing API and AI assistant. Errors are {error: {code, message, request_id}}. Out-of-scope ids return 404, never 403. Bearer token from POST /auth/login.",
   },
   servers: [{ url: "http://localhost:4000" }],
   paths: {
@@ -150,5 +173,34 @@ export const openApiDocument = {
         responses: { "201": { description: "{ seatsCreated }" }, "409": { description: "Already generated" } },
       },
     },
+    ...summarisedPaths({
+      "/holds": {
+        get: "The caller's live holds; filter with event_id",
+        post: "Hold seats or GA tickets. Body {event_id, seat_ids[] | tier_id+qty} (camelCase also accepted). 201 {hold_id, expires_at} | 409. Idempotency-Key optional",
+      },
+      "/holds/{id}": { delete: "Release a hold. 409 CHECKOUT_IN_PROGRESS while a charge is in flight" },
+      "/orders": {
+        post: "Convert a hold into an order. Idempotency-Key required; X-Payment-Scenario optional. 201 paid | 202 outcome unknown, retry with the same key | 402 declined | 409 expired or in progress | 422 key reused",
+      },
+      "/orders/{id}/refund": { post: "Refund all or some tickets. Idempotency-Key required. 200 | 403 | 404 | 409 | 422" },
+      "/me/orders": { get: "The caller's own orders; cursor paginated" },
+      "/me/memberships": { get: "Organisers the caller belongs to" },
+      "/me/conversations": { get: "The caller's assistant conversations" },
+      "/me/conversations/{id}": { get: "One conversation, with display messages and any live confirmation" },
+      "/agent/chat": { post: "One assistant turn. {conversationId?, message} returns answer, citations, confirmation state and tool activity" },
+      "/tickets/{code}/checkin": { post: "Check a ticket in, once. 200 | 409 already checked in | 404" },
+      "/events/{eventId}/seats": { get: "Seats for an event. Each id is what POST /holds takes" },
+      "/events/{eventId}/reviews": { get: "Reviews, public; cursor paginated", post: "Review an event you attended, once it has completed" },
+      "/events/{eventId}/cancel": { post: "Cancel an event and refund paid orders exactly once (organiser admin). Same as the nested route" },
+      "/audit": { get: "Audit entries scoped by role. entity=Type:id for members; the unfiltered feed is admin-only; organiser_id narrows it" },
+      "/organisers/{organiserId}/events/{eventId}/on-sale": { post: "Put an event on sale (admin)" },
+      "/organisers/{organiserId}/events/{eventId}/complete": { post: "Mark an event completed (admin)" },
+      "/organisers/{organiserId}/events/{eventId}/cancel": { post: "Cancel an event and refund paid orders exactly once (admin)" },
+      "/organisers/{organiserId}/orders": { get: "This organiser's orders, newest first; event_id and q filters (members)" },
+      "/organisers/{organiserId}/reports/sales": { get: "Net sales aggregated with group_by=event|day|tier, from and to (members)" },
+      "/organisers/{organiserId}/audit": { get: "This organiser's audit trail. entity=Type:id for members; the whole feed is admin-only" },
+      "/organisers/{organiserId}/members": { get: "List members (admin)", post: "Add a member by email (admin)" },
+      "/organisers/{organiserId}/members/{userId}": { patch: "Change a member's role (admin)", delete: "Remove a member (admin). 409 if they're the last admin" },
+    }),
   },
 } as const;
