@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { apiFetch, ApiError, formatMinor } from "../../../../lib/api";
-import { cardStyle, errorStyle, inputStyle, mutedStyle } from "../../../../lib/styles";
+import { apiFetch, errorMessage, formatMinor } from "../../../../lib/api";
+import { EmptyState, ErrorBanner, Field, PageHeader, SkeletonCard, Stat, TextInput } from "../../../../components/ui";
 
 interface SalesGroup {
   key: string;
@@ -12,52 +12,104 @@ interface SalesGroup {
   ticketCount: number;
 }
 interface SalesSummary {
-  groupBy: string;
   totalRevenueMinor: number;
   totalTicketCount: number;
   groups: SalesGroup[];
 }
 
+type GroupBy = "event" | "day" | "tier";
+const TABS: { key: GroupBy; label: string }[] = [
+  { key: "event", label: "By event" },
+  { key: "day", label: "By day" },
+  { key: "tier", label: "By tier" },
+];
+
+function labelFor(group: SalesGroup, groupBy: GroupBy): string {
+  if (groupBy === "day") return new Date(group.key).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  return group.label ?? group.key;
+}
+
+/** One measure, one hue. Bars carry labels and values directly, so nothing relies
+ * on colour, and the same numbers are the row text a screen reader gets. */
+function SalesBars({ groups, groupBy }: { groups: SalesGroup[]; groupBy: GroupBy }) {
+  const max = Math.max(...groups.map((g) => g.revenueMinor), 1);
+  return (
+    <div className="data-table-wrap">
+      <div className="bar-chart">
+        {groups.map((group) => {
+          const label = labelFor(group, groupBy);
+          return (
+            <div key={group.key} className="bar-row" title={`${label}: ${formatMinor(group.revenueMinor)} from ${group.ticketCount} tickets`}>
+              <div className="bar-label">{label}</div>
+              <div className="bar-track" aria-hidden="true">
+                <div className="bar-fill" style={{ width: `${(group.revenueMinor / max) * 100}%` }} />
+              </div>
+              <div className="bar-value">
+                {formatMinor(group.revenueMinor)}
+                <small>
+                  {group.ticketCount} ticket{group.ticketCount === 1 ? "" : "s"}
+                </small>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function OrganiserReportsPage() {
   const { organiserId } = useParams<{ organiserId: string }>();
-  const [groupBy, setGroupBy] = useState<"event" | "day" | "tier">("event");
+  const [groupBy, setGroupBy] = useState<GroupBy>("event");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
   const [summary, setSummary] = useState<SalesSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    setLoading(true);
     setError(null);
-    apiFetch<SalesSummary>(`/organisers/${organiserId}/reports/sales?group_by=${groupBy}`)
+    const query = new URLSearchParams({ group_by: groupBy });
+    if (from) query.set("from", new Date(`${from}T00:00:00`).toISOString());
+    if (to) query.set("to", new Date(`${to}T23:59:59`).toISOString());
+    apiFetch<SalesSummary>(`/organisers/${organiserId}/reports/sales?${query}`)
       .then(setSummary)
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Could not load sales report."))
-      .finally(() => setLoading(false));
-  }, [organiserId, groupBy]);
+      .catch((err) => setError(errorMessage(err, "Could not load sales.")));
+  }, [organiserId, groupBy, from, to]);
+
+  const average = summary && summary.totalTicketCount > 0 ? Math.round(summary.totalRevenueMinor / summary.totalTicketCount) : null;
 
   return (
     <div>
-      <h1>Sales report</h1>
-      <select value={groupBy} onChange={(e) => setGroupBy(e.target.value as typeof groupBy)} style={{ ...inputStyle, width: 160, marginBottom: 16 }}>
-        <option value="event">By event</option>
-        <option value="day">By day</option>
-        <option value="tier">By tier</option>
-      </select>
+      <PageHeader title="Sales" description="Net of refunds. Grouped by the date each order was placed." />
 
-      {loading && <p>Loading…</p>}
-      {error && <p style={errorStyle}>{error}</p>}
+      <div className="inline-form" style={{ marginBottom: 20 }}>
+        <Field label="From" htmlFor="sales-from">
+          <TextInput id="sales-from" type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
+        </Field>
+        <Field label="To" htmlFor="sales-to">
+          <TextInput id="sales-to" type="date" value={to} onChange={(e) => setTo(e.target.value)} />
+        </Field>
+      </div>
+
+      {error && <ErrorBanner message={error} />}
+      {!summary && !error && <SkeletonCard />}
       {summary && (
         <>
-          <p>
-            Total revenue: <strong>{formatMinor(summary.totalRevenueMinor)}</strong> across {summary.totalTicketCount} tickets
-          </p>
-          {summary.groups.map((g) => (
-            <div key={g.key} style={cardStyle}>
-              <strong>{g.label ?? g.key}</strong>
-              <div style={mutedStyle}>
-                {formatMinor(g.revenueMinor)} · {g.ticketCount} ticket(s)
-              </div>
-            </div>
-          ))}
+          <div className="stat-grid">
+            <Stat label="Net revenue" value={formatMinor(summary.totalRevenueMinor)} />
+            <Stat label="Tickets sold" value={summary.totalTicketCount.toLocaleString("en-IN")} />
+            <Stat label="Average ticket" value={average !== null ? formatMinor(average) : "—"} />
+          </div>
+
+          <div className="tabs" role="tablist">
+            {TABS.map((tab) => (
+              <button key={tab.key} className="tab" role="tab" aria-selected={groupBy === tab.key} onClick={() => setGroupBy(tab.key)}>
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {summary.groups.length === 0 ? <EmptyState title="No sales in this period" /> : <SalesBars groups={summary.groups} groupBy={groupBy} />}
         </>
       )}
     </div>

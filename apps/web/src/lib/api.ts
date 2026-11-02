@@ -53,16 +53,16 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    /** The parsed response, for a failure that still carries useful state. */
+    public body?: unknown,
   ) {
     super(message);
   }
 }
 
-/** Every call goes through here — auth header injection is automatic (never
- * trust the UI to remember to attach it), and every non-2xx response is
- * turned into a thrown ApiError carrying the server's real error code, so
- * callers can show the server's actual reason rather than a generic
- * failure message. Never swallows an error into a fake success. */
+/** Every call goes through here. Auth is attached automatically, and a non-2xx
+ * response becomes an ApiError carrying the server's own code and message, so
+ * callers show the real reason and never turn a failure into a fake success. */
 export async function apiFetch<T>(
   path: string,
   options?: {
@@ -80,25 +80,64 @@ export async function apiFetch<T>(
     ...options?.headers,
   };
 
-  const response = await fetch(`${API_URL}${path}`, {
-    method: options?.method ?? "GET",
-    headers,
-    body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
-    cache: "no-store",
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      method: options?.method ?? "GET",
+      headers,
+      body: options?.body !== undefined ? JSON.stringify(options.body) : undefined,
+      cache: "no-store",
+    });
+  } catch {
+    throw new ApiError(0, "NETWORK_ERROR", "Can't reach the server. Check your connection and try again.");
+  }
 
   const text = await response.text();
-  const parsed = text ? JSON.parse(text) : null;
+  let parsed: { error?: { code?: string; message?: string } } | null = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    // A proxy's HTML error page, say. The status below still tells the caller.
+  }
+
+  if (response.status === 401 && token) {
+    clearSession();
+    if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+      window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+    }
+  }
 
   if (!response.ok) {
     const code = parsed?.error?.code ?? "UNKNOWN_ERROR";
     const message = parsed?.error?.message ?? `Request failed with status ${response.status}`;
-    throw new ApiError(response.status, code, message);
+    throw new ApiError(response.status, code, message, parsed);
   }
 
   return parsed as T;
 }
 
+export function errorMessage(err: unknown, fallback: string): string {
+  return err instanceof ApiError ? err.message : fallback;
+}
+
+/** Amounts are stored in paise. Whole rupees drop the ".00". */
 export function formatMinor(amountMinor: number): string {
-  return `₹${(amountMinor / 100).toFixed(2)}`;
+  return new Intl.NumberFormat("en-IN", {
+    style: "currency",
+    currency: "INR",
+    maximumFractionDigits: amountMinor % 100 === 0 ? 0 : 2,
+  }).format(amountMinor / 100);
+}
+
+export function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+export function formatShortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+}
+
+export function statusLabel(status: string): string {
+  const lower = status.replace(/_/g, " ").toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
 }

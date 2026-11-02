@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from "react";
 import Link from "next/link";
 import { apiFetch, ApiError, setSession } from "../../lib/api";
-import { buttonStyle, inputStyle } from "../../lib/styles";
+import { Button, Card, Field, TextInput, ErrorBanner } from "../../components/ui";
 
 export default function RegisterPage() {
   const [name, setName] = useState("");
@@ -31,28 +31,28 @@ export default function RegisterPage() {
   }
 
   return (
-    <div style={{ maxWidth: 360 }}>
-      <h1>Create an account</h1>
-      <form onSubmit={handleSubmit}>
-        <label style={{ display: "block", marginBottom: 12 }}>
-          Name
-          <input type="text" required value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
-        </label>
-        <label style={{ display: "block", marginBottom: 12 }}>
-          Email
-          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} style={inputStyle} />
-        </label>
-        <label style={{ display: "block", marginBottom: 12 }}>
-          Password (min 8 characters)
-          <input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} style={inputStyle} />
-        </label>
-        {error && <p style={{ color: "#b00020" }}>{error}</p>}
-        <button type="submit" disabled={loading} style={buttonStyle}>
-          {loading ? "Creating account…" : "Register"}
-        </button>
-      </form>
-      <p style={{ marginTop: 16 }}>
-        Already have an account? <Link href="/login">Log in</Link>
+    <div className="auth-page">
+      <h1>Create your account</h1>
+      <p className="page-description">Book tickets, keep them in one place, and chat with the assistant.</p>
+      <Card>
+        <form onSubmit={handleSubmit}>
+          <Field label="Name" htmlFor="register-name">
+            <TextInput id="register-name" type="text" required value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+          </Field>
+          <Field label="Email" htmlFor="register-email">
+            <TextInput id="register-email" type="email" required value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" />
+          </Field>
+          <Field label="Password (min 8 characters)" htmlFor="register-password">
+            <TextInput id="register-password" type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
+          </Field>
+          {error && <ErrorBanner message={error} />}
+          <Button type="submit" disabled={loading} block>
+            {loading ? "Creating account…" : "Register"}
+          </Button>
+        </form>
+      </Card>
+      <p style={{ marginTop: 16, textAlign: "center" }}>
+        Already have an account? <Link href="/login" style={{ color: "var(--color-accent-strong)" }}>Log in</Link>
       </p>
     </div>
   );

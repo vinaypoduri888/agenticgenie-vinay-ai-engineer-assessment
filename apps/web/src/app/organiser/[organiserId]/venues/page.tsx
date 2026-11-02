@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { apiFetch, ApiError } from "../../../../lib/api";
-import { buttonStyle, cardStyle, errorStyle, inputStyle } from "../../../../lib/styles";
+import { Button, Card, Field, PageHeader, TextInput, ErrorBanner, SkeletonCard } from "../../../../components/ui";
 
 interface Venue {
   id: string;
@@ -56,29 +56,29 @@ export default function OrganiserVenuesPage() {
     }
   }
 
-  if (loading) return <p>Loading…</p>;
-  if (error) return <p style={errorStyle}>{error}</p>;
+  if (loading) return <SkeletonCard />;
+  if (error) return <ErrorBanner message={error} />;
 
   return (
     <div>
-      <h1>Venues</h1>
-      <form onSubmit={createVenue} style={cardStyle}>
+      <PageHeader title="Venues" description="A venue holds the seat map your events sell from." />
+      <Card style={{ marginBottom: 24 }}>
         <h3>Create venue</h3>
-        <input type="text" placeholder="Name" required value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
-        <input type="text" placeholder="City" required value={city} onChange={(e) => setCity(e.target.value)} style={inputStyle} />
-        <input type="text" placeholder="Address" required value={address} onChange={(e) => setAddress(e.target.value)} style={inputStyle} />
-        {createError && <p style={errorStyle}>{createError}</p>}
-        <button type="submit" style={buttonStyle}>
-          Create venue
-        </button>
-      </form>
+        <form onSubmit={createVenue}>
+          <Field label="Name" htmlFor="venue-name"><TextInput id="venue-name" type="text" required value={name} onChange={(e) => setName(e.target.value)} /></Field>
+          <Field label="City" htmlFor="venue-city"><TextInput id="venue-city" type="text" required value={city} onChange={(e) => setCity(e.target.value)} /></Field>
+          <Field label="Address" htmlFor="venue-address"><TextInput id="venue-address" type="text" required value={address} onChange={(e) => setAddress(e.target.value)} /></Field>
+          {createError && <ErrorBanner message={createError} />}
+          <Button type="submit">Create venue</Button>
+        </form>
+      </Card>
 
       {venues.map((v) => (
-        <Link key={v.id} href={`/organiser/${organiserId}/venues/${v.id}`} style={{ textDecoration: "none", color: "inherit" }}>
-          <div style={cardStyle}>
+        <Link key={v.id} href={`/organiser/${organiserId}/venues/${v.id}`} style={{ textDecoration: "none", color: "inherit", display: "block" }}>
+          <Card interactive style={{ marginBottom: 10 }}>
             <strong>{v.name}</strong> — {v.city}
-            <div>{v.address}</div>
-          </div>
+            <div style={{ color: "var(--color-text-muted)", fontSize: "0.88rem" }}>{v.address}</div>
+          </Card>
         </Link>
       ))}
     </div>
