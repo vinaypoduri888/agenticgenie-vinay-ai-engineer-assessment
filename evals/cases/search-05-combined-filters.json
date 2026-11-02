@@ -1,0 +1,103 @@
+{
+  "id": "search-05-combined-filters",
+  "category": "search",
+  "description": "search_events combines city + category filters, excluding events matching only one",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venuePune",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "venue",
+      "ref": "venueMumbai",
+      "organiser": "org1",
+      "city": "Mumbai"
+    },
+    {
+      "kind": "event",
+      "ref": "eventMatch",
+      "organiser": "org1",
+      "venue": "venuePune",
+      "status": "PUBLISHED",
+      "title": "Pune Comedy Combo",
+      "category": "comedy"
+    },
+    {
+      "kind": "event",
+      "ref": "eventWrongCategory",
+      "organiser": "org1",
+      "venue": "venuePune",
+      "status": "PUBLISHED",
+      "title": "Pune Music Combo",
+      "category": "music"
+    },
+    {
+      "kind": "event",
+      "ref": "eventWrongCity",
+      "organiser": "org1",
+      "venue": "venueMumbai",
+      "status": "PUBLISHED",
+      "title": "Mumbai Comedy Combo",
+      "category": "comedy"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Find comedy shows in Pune"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "city": "Pune",
+            "category": "comedy"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Found it: Pune Comedy Combo [event:{{eventMatch}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{eventMatch}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true,
+        "args": {
+          "city": "Pune",
+          "category": "comedy"
+        }
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Pune Comedy Combo"
+    ],
+    "answerNotContains": [
+      "Pune Music Combo",
+      "Mumbai Comedy Combo"
+    ],
+    "citationsValid": true,
+    "dbChecks": [],
+    "dbUnchanged": true,
+    "mustCitePrefix": [
+      "event:"
+    ]
+  }
+}

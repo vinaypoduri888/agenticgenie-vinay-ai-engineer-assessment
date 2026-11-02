@@ -1,0 +1,125 @@
+{
+  "id": "adversarial-21-ambiguous-three-matches",
+  "category": "adversarial",
+  "description": "'Book 2 tickets for the comedy show on Saturday' when three match: a clarifying question listing all three, and no hold.",
+  "mockOnly": false,
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "e1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Laugh Riot Early Show",
+      "category": "comedy",
+      "startsAt": "+5d"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "t1",
+      "event": "e1",
+      "totalQuantity": 20
+    },
+    {
+      "kind": "event",
+      "ref": "e2",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Laugh Riot Late Show",
+      "category": "comedy",
+      "startsAt": "+5d"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "t2",
+      "event": "e2",
+      "totalQuantity": 20
+    },
+    {
+      "kind": "event",
+      "ref": "e3",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Open Mic Saturday",
+      "category": "comedy",
+      "startsAt": "+5d"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "t3",
+      "event": "e3",
+      "totalQuantity": 20
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Book 2 tickets for the comedy show on Saturday"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "category": "comedy",
+            "city": "Pune"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Three shows match: Laugh Riot Early Show [event:{{e1}}], Laugh Riot Late Show [event:{{e2}}] and Open Mic Saturday [event:{{e3}}]. Which one would you like?\", \"citations\": [{\"type\":\"event\",\"id\":\"{{e1}}\"},{\"type\":\"event\",\"id\":\"{{e2}}\"},{\"type\":\"event\",\"id\":\"{{e3}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Laugh Riot Early Show",
+      "Laugh Riot Late Show",
+      "Open Mic Saturday"
+    ],
+    "toolsForbidden": [
+      "hold_seats",
+      "purchase"
+    ],
+    "mustCitePrefix": [
+      "event:"
+    ],
+    "citationsValid": true,
+    "dbUnchanged": true,
+    "dbChecks": [
+      {
+        "check": {
+          "type": "noHoldForEvent",
+          "eventRef": "e1",
+          "userRef": "attendee1"
+        }
+      }
+    ]
+  }
+}

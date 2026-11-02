@@ -1,0 +1,97 @@
+{
+  "id": "search-04-max-price",
+  "category": "search",
+  "description": "search_events filters by max_price, excluding a more expensive event",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "eventBudget",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Budget Open Mic"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "tierBudget",
+      "event": "eventBudget",
+      "priceMinor": 50000,
+      "totalQuantity": 20
+    },
+    {
+      "kind": "event",
+      "ref": "eventPremium",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Premium Gala Show"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "tierPremium",
+      "event": "eventPremium",
+      "priceMinor": 500000,
+      "totalQuantity": 20
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Show me events under 1000 rupees"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "max_price": 1000
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Within budget: Budget Open Mic [event:{{eventBudget}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{eventBudget}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true,
+        "args": {
+          "max_price": 1000
+        }
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Budget Open Mic"
+    ],
+    "answerNotContains": [
+      "Premium Gala Show"
+    ],
+    "citationsValid": true,
+    "dbChecks": [],
+    "dbUnchanged": true,
+    "mustCitePrefix": [
+      "event:"
+    ]
+  }
+}

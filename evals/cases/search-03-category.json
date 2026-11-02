@@ -1,0 +1,85 @@
+{
+  "id": "search-03-category",
+  "category": "search",
+  "description": "search_events filters by category, excluding a non-matching event",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "eventComedy",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Laugh Riot",
+      "category": "comedy"
+    },
+    {
+      "kind": "event",
+      "ref": "eventMusic",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Sound Wave Fest",
+      "category": "music"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Show me comedy shows"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "category": "comedy"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Here's a comedy show: Laugh Riot [event:{{eventComedy}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{eventComedy}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true,
+        "args": {
+          "category": "comedy"
+        }
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Laugh Riot"
+    ],
+    "answerNotContains": [
+      "Sound Wave Fest"
+    ],
+    "citationsValid": true,
+    "dbChecks": [],
+    "dbUnchanged": true,
+    "mustCitePrefix": [
+      "event:"
+    ]
+  }
+}

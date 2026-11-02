@@ -1,0 +1,34 @@
+{
+  "id": "reliability-27-malformed-then-repaired",
+  "category": "reliability",
+  "description": "Malformed output gets one repair turn, and the repaired answer is used.",
+  "mockOnly": true,
+  "seed": [
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Hello"
+  ],
+  "mockScript": [
+    {
+      "type": "final",
+      "content": "Sure! Here you go, not JSON at all."
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Hello, how can I help?\"}"
+    }
+  ],
+  "expectations": {
+    "outcome": "success",
+    "answerContains": [
+      "how can I help"
+    ],
+    "dbUnchanged": true,
+    "dbChecks": []
+  }
+}

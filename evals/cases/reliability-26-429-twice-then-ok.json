@@ -1,0 +1,75 @@
+{
+  "id": "reliability-26-429-twice-then-ok",
+  "category": "reliability",
+  "description": "The assessment's example: the provider returns 429 twice and then answers. The turn succeeds, not degraded, after two retries.",
+  "mockOnly": true,
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "e1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Find events in Pune"
+  ],
+  "mockScript": [
+    {
+      "type": "provider_error",
+      "category": "rate_limited",
+      "retryAfterMs": 1
+    },
+    {
+      "type": "provider_error",
+      "category": "rate_limited",
+      "retryAfterMs": 1
+    },
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "city": "Pune"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Found Riverside Jazz Fest [event:{{e1}}].\", \"citations\": [{\"type\":\"event\",\"id\":\"{{e1}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true
+      }
+    ],
+    "outcome": "success",
+    "degraded": false,
+    "minRetries": 2,
+    "citationsValid": true,
+    "dbChecks": []
+  }
+}

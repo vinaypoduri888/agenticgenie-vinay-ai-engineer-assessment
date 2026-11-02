@@ -1,0 +1,98 @@
+{
+  "id": "grounding-12-valid-citations",
+  "category": "grounding",
+  "description": "A factual response citing both an event and a review is verified against records the tools actually returned, not model-trusted",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "event1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "COMPLETED",
+      "title": "Riverside Jazz Fest"
+    },
+    {
+      "kind": "user",
+      "ref": "reviewer1"
+    },
+    {
+      "kind": "review",
+      "ref": "review1",
+      "event": "event1",
+      "user": "reviewer1",
+      "rating": 5,
+      "text": "Best show of the year."
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Tell me about Riverside Jazz Fest and what people thought of it"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "get_event",
+          "arguments": {
+            "id": "{{event1}}"
+          }
+        }
+      ]
+    },
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c2",
+          "name": "get_reviews",
+          "arguments": {
+            "event_id": "{{event1}}",
+            "limit": 20
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Riverside Jazz Fest [event:{{event1}}] wrapped up recently, and one attendee called it the best show of the year [review:{{review1}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{event1}}\"}, {\"type\": \"review\", \"id\": \"{{review1}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "get_event",
+        "success": true
+      },
+      {
+        "name": "get_reviews",
+        "success": true
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Riverside Jazz Fest"
+    ],
+    "citationsValid": true,
+    "dbChecks": [],
+    "mustCitePrefix": [
+      "event:",
+      "review:"
+    ]
+  }
+}

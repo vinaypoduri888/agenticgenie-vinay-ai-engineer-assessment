@@ -1,0 +1,83 @@
+{
+  "id": "search-02-date",
+  "category": "search",
+  "description": "search_events filters by date range, excluding an event outside the window",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "eventSoon",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Soon Show",
+      "startsAt": "+2d"
+    },
+    {
+      "kind": "event",
+      "ref": "eventFar",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Far Show",
+      "startsAt": "+60d"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "What's happening in the next week?"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "date_from": "{{now}}",
+            "date_to": "{{now+7d}}"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Coming up in the next week: Soon Show [event:{{eventSoon}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{eventSoon}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Soon Show"
+    ],
+    "answerNotContains": [
+      "Far Show"
+    ],
+    "citationsValid": true,
+    "dbChecks": [],
+    "dbUnchanged": true,
+    "mustCitePrefix": [
+      "event:"
+    ]
+  }
+}

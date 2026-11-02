@@ -1,0 +1,73 @@
+{
+  "id": "aggregation-06-event-details",
+  "category": "aggregation",
+  "description": "get_event returns full detail and availability, grounded with a citation",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "event1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "tier1",
+      "event": "event1",
+      "name": "General Admission",
+      "totalQuantity": 10
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Tell me more about Riverside Jazz Fest and whether tickets are available"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "get_event",
+          "arguments": {
+            "id": "{{event1}}"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Riverside Jazz Fest [event:{{event1}}] has General Admission tickets available.\", \"citations\": [{\"type\": \"event\", \"id\": \"{{event1}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "get_event",
+        "success": true
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Riverside Jazz Fest",
+      "General Admission"
+    ],
+    "citationsValid": true,
+    "dbChecks": []
+  }
+}

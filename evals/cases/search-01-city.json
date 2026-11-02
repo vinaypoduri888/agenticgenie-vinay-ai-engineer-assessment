@@ -1,0 +1,93 @@
+{
+  "id": "search-01-city",
+  "category": "search",
+  "description": "search_events filters by city, returning only the matching real seeded event",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venuePune",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "venue",
+      "ref": "venueMumbai",
+      "organiser": "org1",
+      "city": "Mumbai"
+    },
+    {
+      "kind": "event",
+      "ref": "eventPune",
+      "organiser": "org1",
+      "venue": "venuePune",
+      "status": "PUBLISHED",
+      "title": "Pune Comedy Night",
+      "category": "comedy"
+    },
+    {
+      "kind": "event",
+      "ref": "eventMumbai",
+      "organiser": "org1",
+      "venue": "venueMumbai",
+      "status": "PUBLISHED",
+      "title": "Mumbai Jazz Evening",
+      "category": "music"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Find events happening in Pune"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "city": "Pune",
+            "limit": 20
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"I found one event in Pune: Pune Comedy Night [event:{{eventPune}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{eventPune}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true,
+        "args": {
+          "city": "Pune",
+          "limit": 20
+        }
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Pune Comedy Night"
+    ],
+    "answerNotContains": [
+      "Mumbai Jazz Evening"
+    ],
+    "citationsValid": true,
+    "dbChecks": [],
+    "dbUnchanged": true,
+    "mustCitePrefix": [
+      "event:"
+    ]
+  }
+}

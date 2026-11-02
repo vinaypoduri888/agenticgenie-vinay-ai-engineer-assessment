@@ -1,0 +1,113 @@
+{
+  "id": "actions-31-confirmation-states-specifics",
+  "category": "actions",
+  "description": "The confirmation names what, how many and how much, from the database, as the assessment's '2 seats, ₹1,400 total. Reply YES' example does.",
+  "mockOnly": false,
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "e1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "t1",
+      "event": "e1",
+      "name": "Stalls",
+      "priceMinor": 70000,
+      "totalQuantity": 10
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Get me two Stalls tickets for Riverside Jazz Fest, event {{e1}}, tier {{t1}}"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "hold_seats",
+          "arguments": {
+            "event_id": "{{e1}}",
+            "tier_id": "{{t1}}",
+            "quantity": 2
+          }
+        }
+      ]
+    },
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c2",
+          "name": "purchase",
+          "arguments": {
+            "hold_id": {
+              "$lastToolResult": "id"
+            },
+            "confirm": false
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"2 Stalls tickets, ₹1,400 total. Reply YES to confirm.\", \"needsConfirmation\": true}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "hold_seats",
+        "success": true,
+        "args": {
+          "quantity": 2
+        }
+      },
+      {
+        "name": "purchase",
+        "success": true
+      }
+    ],
+    "outcome": "success",
+    "dbChecks": [
+      {
+        "check": {
+          "type": "pendingConfirmationSays",
+          "contains": [
+            "2 Stalls tickets",
+            "Riverside Jazz Fest",
+            "₹1,400",
+            "YES"
+          ]
+        }
+      },
+      {
+        "check": {
+          "type": "noNewOrderForEvent",
+          "eventRef": "e1",
+          "userRef": "attendee1"
+        }
+      }
+    ]
+  }
+}

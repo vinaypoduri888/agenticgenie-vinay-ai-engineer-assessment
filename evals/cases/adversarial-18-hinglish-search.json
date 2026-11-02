@@ -1,0 +1,107 @@
+{
+  "id": "adversarial-18-hinglish-search",
+  "category": "adversarial",
+  "description": "The assessment's Hinglish query: grounded results within budget, answered in Hinglish. The mock's arguments are scripted, so only the real-model run tests understanding of the language.",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "event1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Hasya Kavi Sammelan",
+      "category": "comedy"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "tierCheap",
+      "event": "event1",
+      "priceMinor": 40000,
+      "totalQuantity": 20
+    },
+    {
+      "kind": "event",
+      "ref": "eventPricey",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Premium Roast Night",
+      "category": "comedy"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "tierPricey",
+      "event": "eventPricey",
+      "priceMinor": 250000,
+      "totalQuantity": 20
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "is weekend Pune mein koi comedy show hai? 2 tickets 1000 ke andar chahiye"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "city": "Pune",
+            "category": "comedy",
+            "max_price": 1000
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Pune mein ek comedy show hai: Hasya Kavi Sammelan [event:{{event1}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{event1}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true,
+        "args": {
+          "city": "Pune",
+          "category": "comedy",
+          "max_price": 1000
+        }
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [
+      "Hasya Kavi Sammelan"
+    ],
+    "citationsValid": true,
+    "dbChecks": [],
+    "answerNotContains": [
+      "Premium Roast Night"
+    ],
+    "mustCitePrefix": [
+      "event:"
+    ],
+    "toolsForbidden": [
+      "hold_seats",
+      "purchase"
+    ],
+    "dbUnchanged": true
+  }
+}

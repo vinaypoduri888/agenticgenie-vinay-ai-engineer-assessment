@@ -1,0 +1,39 @@
+{
+  "id": "grounding-30-fabricated-details-removed",
+  "category": "grounding",
+  "description": "A model that invents a record id and a price, and doesn't fix them on repair: both are removed from what the user reads.",
+  "mockOnly": true,
+  "seed": [
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "When is the Arijit Singh concert?"
+  ],
+  "mockScript": [
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Arijit Singh plays Friday [event:madeup123], tickets from ₹2,999.\"}"
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Arijit Singh plays Friday [event:madeup123], tickets from ₹2,999.\"}"
+    }
+  ],
+  "expectations": {
+    "outcome": "success",
+    "answerNotContains": [
+      "madeup123",
+      "₹2,999"
+    ],
+    "citationsValid": true,
+    "guardEvents": [
+      "unverified_figures_masked"
+    ],
+    "dbUnchanged": true,
+    "dbChecks": []
+  }
+}

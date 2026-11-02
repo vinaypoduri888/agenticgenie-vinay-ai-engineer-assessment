@@ -1,0 +1,93 @@
+{
+  "id": "aggregation-08-sales-summary",
+  "category": "aggregation",
+  "description": "sales_summary returns real revenue figures for an organiser admin, with correct permission resolution",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "user",
+      "ref": "admin1"
+    },
+    {
+      "kind": "membership",
+      "user": "admin1",
+      "organiser": "org1",
+      "role": "ADMIN"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "event1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "tier1",
+      "event": "event1",
+      "priceMinor": 50000,
+      "totalQuantity": 10
+    },
+    {
+      "kind": "user",
+      "ref": "buyer1"
+    },
+    {
+      "kind": "order",
+      "ref": "order1",
+      "user": "buyer1",
+      "event": "event1",
+      "tier": "tier1",
+      "quantity": 1
+    }
+  ],
+  "persona": "admin1",
+  "conversation": [
+    "What are my total sales so far?"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "sales_summary",
+          "arguments": {
+            "group_by": "event"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Your total revenue so far is 500 rupees across 1 ticket.\"}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "sales_summary",
+        "success": true,
+        "args": {
+          "group_by": "event"
+        }
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [],
+    "dbChecks": [],
+    "answerMatches": [
+      "\\b500\\b"
+    ]
+  }
+}

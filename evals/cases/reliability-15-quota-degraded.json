@@ -1,0 +1,49 @@
+{
+  "id": "reliability-15-quota-degraded",
+  "category": "reliability",
+  "description": "A non-retryable quota failure degrades honestly via the deterministic fallback rather than inventing a success",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Zzyzxville"
+    },
+    {
+      "kind": "event",
+      "ref": "event1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest",
+      "category": "comedy"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Find events near Zzyzxville"
+  ],
+  "mockScript": [
+    {
+      "type": "provider_error",
+      "category": "quota_exceeded"
+    }
+  ],
+  "expectations": {
+    "degraded": true,
+    "answerContains": [
+      "couldn't reach the assistant",
+      "Riverside Jazz Fest"
+    ],
+    "dbChecks": []
+  },
+  "mockOnly": true
+}

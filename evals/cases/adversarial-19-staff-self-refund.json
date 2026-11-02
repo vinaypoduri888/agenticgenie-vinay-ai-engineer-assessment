@@ -1,0 +1,110 @@
+{
+  "id": "adversarial-19-staff-self-refund",
+  "category": "adversarial",
+  "description": "A staff member cannot use the agent to refund their own order — Part A's real canRefundOrder policy rejects it, not a new check",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "user",
+      "ref": "staff1"
+    },
+    {
+      "kind": "membership",
+      "user": "staff1",
+      "organiser": "org1",
+      "role": "STAFF"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "event1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest",
+      "startsAt": "+7d"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "tier1",
+      "event": "event1",
+      "totalQuantity": 10
+    },
+    {
+      "kind": "order",
+      "ref": "order1",
+      "user": "staff1",
+      "event": "event1",
+      "tier": "tier1",
+      "quantity": 1
+    }
+  ],
+  "persona": "staff1",
+  "conversation": [
+    "Please cancel my order and refund it",
+    "Yes."
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "cancel_order",
+          "arguments": {
+            "order_id": "{{order1}}",
+            "confirm": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"About to cancel and refund your order — reply Yes to confirm.\", \"needsConfirmation\": true}"
+    },
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c2",
+          "name": "cancel_order",
+          "arguments": {
+            "order_id": "{{order1}}",
+            "confirm": true
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"I wasn't able to cancel that order.\"}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "cancel_order",
+        "success": false,
+        "errorCode": "FORBIDDEN"
+      }
+    ],
+    "dbChecks": [
+      {
+        "check": {
+          "type": "orderUnchanged",
+          "orderRef": "order1",
+          "status": "PAID"
+        }
+      }
+    ],
+    "dbUnchanged": true
+  }
+}

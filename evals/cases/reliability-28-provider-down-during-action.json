@@ -1,0 +1,51 @@
+{
+  "id": "reliability-28-provider-down-during-action",
+  "category": "reliability",
+  "description": "The provider times out on every attempt during a booking request. An honest partial result, and nothing is booked.",
+  "mockOnly": true,
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "e1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Book me a ticket for Riverside Jazz Fest"
+  ],
+  "mockScript": [
+    {
+      "type": "provider_error",
+      "category": "timeout",
+      "retryAfterMs": 1
+    }
+  ],
+  "expectations": {
+    "outcome": "partial",
+    "toolsForbidden": [
+      "hold_seats",
+      "purchase"
+    ],
+    "minRetries": 1,
+    "dbUnchanged": true,
+    "dbChecks": []
+  }
+}

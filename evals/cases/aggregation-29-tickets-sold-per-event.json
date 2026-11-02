@@ -1,0 +1,106 @@
+{
+  "id": "aggregation-29-tickets-sold-per-event",
+  "category": "aggregation",
+  "description": "'Tickets sold per event': the figure in the answer matches the database, and is cited.",
+  "mockOnly": false,
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "user",
+      "ref": "staff1"
+    },
+    {
+      "kind": "membership",
+      "user": "staff1",
+      "organiser": "org1",
+      "role": "STAFF"
+    },
+    {
+      "kind": "event",
+      "ref": "e1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest"
+    },
+    {
+      "kind": "ticketTier",
+      "ref": "t1",
+      "event": "e1",
+      "priceMinor": 50000,
+      "totalQuantity": 10
+    },
+    {
+      "kind": "user",
+      "ref": "buyer"
+    },
+    {
+      "kind": "order",
+      "ref": "o1",
+      "user": "buyer",
+      "event": "e1",
+      "tier": "t1",
+      "quantity": 3
+    }
+  ],
+  "persona": "staff1",
+  "conversation": [
+    "Tickets sold per event?"
+  ],
+  "mockScript": [
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "sales_summary",
+          "arguments": {
+            "group_by": "event"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Riverside Jazz Fest has sold 3 tickets for ₹1,500 [sales:{{e1}}].\", \"citations\": [{\"type\":\"sales\",\"id\":\"{{e1}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "sales_summary",
+        "success": true,
+        "args": {
+          "group_by": "event"
+        }
+      }
+    ],
+    "outcome": "success",
+    "answerContains": [],
+    "mustCitePrefix": [
+      "sales:"
+    ],
+    "citationsValid": true,
+    "dbUnchanged": true,
+    "dbChecks": [
+      {
+        "check": {
+          "type": "answerStatesTicketsSold",
+          "eventRef": "e1"
+        }
+      }
+    ],
+    "answerMatches": [
+      "1,?500"
+    ]
+  }
+}

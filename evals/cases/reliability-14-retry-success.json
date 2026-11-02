@@ -1,0 +1,71 @@
+{
+  "id": "reliability-14-retry-success",
+  "category": "reliability",
+  "description": "A scripted 429 with Retry-After is retried and the turn still succeeds",
+  "seed": [
+    {
+      "kind": "organiser",
+      "ref": "org1"
+    },
+    {
+      "kind": "venue",
+      "ref": "venue1",
+      "organiser": "org1",
+      "city": "Pune"
+    },
+    {
+      "kind": "event",
+      "ref": "event1",
+      "organiser": "org1",
+      "venue": "venue1",
+      "status": "PUBLISHED",
+      "title": "Riverside Jazz Fest",
+      "category": "comedy"
+    },
+    {
+      "kind": "user",
+      "ref": "attendee1"
+    }
+  ],
+  "persona": "attendee1",
+  "conversation": [
+    "Find comedy events"
+  ],
+  "mockScript": [
+    {
+      "type": "provider_error",
+      "category": "rate_limited",
+      "retryAfterMs": 5
+    },
+    {
+      "type": "tool_calls",
+      "toolCalls": [
+        {
+          "id": "c1",
+          "name": "search_events",
+          "arguments": {
+            "category": "comedy"
+          }
+        }
+      ]
+    },
+    {
+      "type": "final",
+      "content": "{\"answer\": \"Found it: Riverside Jazz Fest [event:{{event1}}].\", \"citations\": [{\"type\": \"event\", \"id\": \"{{event1}}\"}]}"
+    }
+  ],
+  "expectations": {
+    "toolCalls": [
+      {
+        "name": "search_events",
+        "success": true
+      }
+    ],
+    "outcome": "success",
+    "degraded": false,
+    "minRetries": 1,
+    "citationsValid": true,
+    "dbChecks": []
+  },
+  "mockOnly": true
+}
