@@ -1,17 +1,23 @@
 import type { ReactNode } from "react";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
+import { Ambient } from "../components/Ambient";
 import { Nav } from "../components/Nav";
+import "./globals.css";
 
 export const metadata = {
-  title: "Agentic Genie Ticketing",
-  description: "Multi-organiser event ticketing platform.",
+  title: "Agentic Genie — AI Event Discovery & Ticketing",
+  description: "Discover and book events through natural conversation, or browse the catalogue directly.",
+  icons: { icon: "/favicon.svg" },
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
-      <body style={{ margin: 0, fontFamily: "system-ui, sans-serif", background: "#f7f7f8", color: "#111" }}>
+      <body>
+        <Ambient />
         <Nav />
-        <main style={{ maxWidth: 960, margin: "0 auto", padding: "24px 20px" }}>{children}</main>
+        <main className="app-main">{children}</main>
       </body>
     </html>
   );
