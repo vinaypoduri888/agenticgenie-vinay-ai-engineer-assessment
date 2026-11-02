@@ -1,11 +1,18 @@
 # Confidential assessment material — never commit
+*.pdf
+*.docx
 agenticgenie-vinay-ai-engineer-assessment.pdf
 ticketbooking.docx
 
 # Env
 .env
 .env.*
+.env.local
 !.env.example
+
+# Sandboxes / local
+.tmp-sandbox
+.claude
 
 # Node
 node_modules/
