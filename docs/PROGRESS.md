@@ -683,4 +683,418 @@ Format per entry: Task / Status / Files changed / Tests run / Commit hash / Rema
 - **Remaining issues:** none blocking. See docs/PART_A_FINAL_AUDIT.md §10 for the full, honest list
   of non-mandatory limitations. Part B and Part C still not started, per standing instruction.
 
+---
+
+## Stage B1 — Part B agent architecture and foundation (2026-11-01)
+
+- **Task:** build the custom AI agent harness's architecture per the Part B mega-prompt's Stage 1
+  scope — a provider abstraction, a deterministic mock provider, a custom tool-calling loop (no
+  LangChain/CrewAI), a tool registry for the seven required tools, and an execution tracer. No real
+  Part A service wiring, no HTTP endpoint, no retries/backoff, no injection defence, no interview
+  extensions — all deliberately deferred to Stage B2+.
+- **Status:** Implemented and verified. On branch `feature/part-b-agent`; Part A untouched except two
+  small, additive changes (see below). Zero regression in the existing 149-test Part A suite.
+- **New workspace package `@agenticgenie/agent`** (`packages/agent/`), depending only on
+  `@agenticgenie/shared` and `zod` — never on `apps/api` (see docs/DECISIONS.md D-045 for why):
+  - `providers/` — `ModelProvider` interface (`providers/types.ts`), a deterministic, fully scriptable
+    `MockProvider` (`providers/mock.ts`) with no randomness and no API key, and a `NemotronProvider`
+    (`providers/nemotron.ts`) implementing the same interface via `fetch` against an OpenAI-compatible
+    endpoint, constructor-configured (never reads `process.env` itself).
+  - `tools/` — `ToolDefinition`/`ToolContext`/`ToolError` (`tools/types.ts`), `ToolRegistry`
+    (`tools/registry.ts`, using Zod v4's built-in `z.toJSONSchema` to build each tool's provider-facing
+    JSON-Schema `parameters`), `dispatchToolCall` (`tools/dispatch.ts` — validates args, enforces a
+    per-tool timeout, never leaks a raw thrown error to the caller, treats a missing `execute` as a
+    clean `NOT_IMPLEMENTED` result rather than a crash — see D-046), and `createDefaultToolRegistry`
+    (`tools/catalogue.ts`) registering all seven required tools (`search_events`, `get_event`,
+    `get_reviews`, `hold_seats`, `purchase`, `cancel_order`, `sales_summary`) with real schemas and
+    metadata but no `execute` yet (Stage B2).
+  - `core/loop.ts` — `runAgentTurn`, the custom tool-calling loop: enforces a max-step limit (default
+    6), a configurable cumulative token budget (checked before honoring even a well-formed final
+    answer — see D-049), a per-tool timeout, exactly one bounded repair attempt per turn on malformed
+    provider output before degrading gracefully, and builds every tool's `ToolContext` solely from the
+    authenticated caller passed into the function — never from anything in a tool-call's arguments.
+  - `tracing/tracer.ts` — `ExecutionTracer`/`AgentTrace`: per-step provider-call latency, token usage,
+    per-tool-call duration/success/retry-count/error-code, and a redaction policy that never records
+    raw tool-call arguments or raw provider content (see D-048).
+  - `conversation/types.ts` — `ConversationState`/`Turn`/`PendingConfirmation` type shapes only (no
+    persistence or enforcement logic yet — that's Stage B2's confirmation-flow work).
+- **New shared schemas:** `packages/shared/src/agent/tools.ts` — Zod input/output contracts for all
+  seven tools, modeled on the REAL Part A service return shapes (checked against
+  `apps/api/src/modules/{events,reviews,holds,orders,refunds,reports}/service.ts` while writing them,
+  not invented). No input schema accepts a `userId`/`actorUserId`-shaped field — the structural half of
+  the "model output is untrusted, identity is never model-supplied" guarantee (the other half is the
+  loop never reading one even if present — see the identity-propagation test below).
+- **Part A changes (small, additive only):** `apps/api/src/env.ts` gained optional `AI_PROVIDER`
+  (default `"mock"`), `NEMOTRON_BASE_URL`, `NEMOTRON_API_KEY`, `NEMOTRON_MODEL` fields — unread by
+  anything yet, forward-looking for Stage B2. `packages/agent`'s `tsconfig.json` was set up to
+  typecheck `test/` alongside `src/`, matching `apps/api`'s existing pattern (caught before it became
+  a gap, not after).
+- **Tests — 47 new, all passing, across 6 files in `packages/agent/test/`:**
+  `mock-provider.test.ts` (deterministic replay, script exhaustion behavior, per-step usage override),
+  `provider-contract.test.ts` (the same contract test run against `MockProvider` and a second, minimal
+  `ModelProvider` implementation), `tool-registry.test.ts` (register/lookup/duplicate-rejection,
+  unknown-tool lookup, JSON-Schema generation, and assertions over the real seven-tool catalogue:
+  correct `sideEffecting`/`requiresConfirmation`/`organiserScoped` flags, no `execute` yet, no
+  identity field in any input schema), `dispatch.test.ts` (valid/invalid args, unknown tool, the
+  `NOT_IMPLEMENTED` path using a real catalogue tool, per-tool timeout, thrown-`ToolError` surfaced
+  as-is, a generic thrown error's message/stack NOT leaked, output-schema violations rejected),
+  `loop.test.ts` (success path, a full tool-call-then-final round trip, max-step enforcement, token-
+  budget enforcement — including that an otherwise-valid final answer is still rejected once the
+  budget is already spent, exactly-one-repair-then-degrade on both bad-JSON and transport-level
+  malformed responses, full trace-field coverage, trace argument redaction, and the identity-
+  propagation proof: a tool call scripted with a hallucinated `userId` field in its arguments still
+  receives a `ToolContext` built only from the real authenticated caller), and
+  `nemotron-provider.test.ts` (correct OpenAI-compatible request shape, final-content parsing,
+  tool-call argument JSON parsing, and five distinct malformed-response paths — bad tool-call JSON,
+  non-2xx HTTP, empty choices, and a network failure — all via a stubbed `fetch`, no real network, no
+  real key).
+- **Verification:** `npx vitest run` in `packages/agent` → **47/47 passing**. `npm run typecheck`
+  (root, all 5 workspaces now) → clean. Full `apps/api` suite re-run → **149/149 passing, zero
+  regression**.
+- **B6 UI proposal:** written up in `docs/UI_PROPOSAL_B6.md` — grounded in the actual current frontend
+  (functional, minimal, plain inline styles via `lib/styles.ts`, no design-token system, no component
+  extraction) with a concrete direction for the "premium modern SaaS" redesign the candidate wants
+  later, once the agent's real tool-calling is in place. Proposal only — no implementation this stage.
+- **Commit hashes:** `7813bf0` — feat(agent): scaffold packages/agent and shared Part B tool schemas;
+  `1e8ca2a` — test(agent): add B1 test suite and forward-looking Nemotron env fields; doc commits
+  recorded immediately below this entry.
+- **Remaining limitations (all deliberate, all Stage B2+ scope, not gaps in B1 itself):** no tool has
+  a real `execute` yet (by design — see D-046); no Express route exposes the loop to the frontend yet;
+  no retry/backoff for transient provider errors yet (only the one structural repair-on-malformed-
+  output path exists); no prompt-injection defence layers yet (the `get_reviews` tool's description
+  already flags review text as untrusted, but no policy-layer enforcement exists); no persisted
+  multi-turn conversation state (the `tracer` parameter and `ConversationState` type exist to make
+  this possible, not to provide it yet); `NemotronProvider` has never been run against a real
+  Nemotron endpoint (only a stubbed `fetch`) — first real-network verification is Stage B2's job, once
+  real credentials are available to test with.
+
+---
+
+## Stage B2+B3+B4 — Real tools, confirmation, security, reliability (2026-11-01)
+
+- **Task:** wire all 7 Part B tools to the real Part A service layer; build the
+  confirmation state machine for `purchase`/`cancel_order`; prompt-injection
+  defence; citation grounding; multi-turn conversation persistence; provider
+  retry/backoff and a deterministic fallback; expose it all via a real,
+  authenticated `POST /agent/chat` endpoint. Combined milestone per the
+  candidate's own instruction, implemented as a sequence of small, independently
+  tested, independently committed steps rather than one large change.
+- **Status:** Implemented and verified — every claim below is backed by a real
+  test that actually ran, listed next to it.
+- **Schema:** new `AgentConversation`/`AgentMessage`/`AgentPendingConfirmation`
+  Prisma models (migration `20261031212037_add_agent_conversations`), applied
+  against the real running Postgres and confirmed via `prisma migrate status`.
+- **packages/agent extensions** (app-agnostic, no Prisma/DB, 49 new tests):
+  `classifyConfirmationIntent` (deterministic allowlist classifier — tested
+  against every ambiguous example phrase in the candidate's own spec, see
+  `test/classify-confirmation.test.ts`); `ToolContext` extended with
+  `conversationId`/`latestUserMessage`, still sourced only from the loop's
+  authenticated inputs; `collectKnownRecords`/`extractCitationTokens`/
+  `checkGrounding` for citation validation; `callProviderWithRetry` (bounded
+  backoff+jitter, `quota_exceeded`/`auth_error` never retried); `MockProvider`
+  extended to script 429/5xx/timeout/network/quota/auth failures; `NemotronProvider`
+  now classifies real HTTP failures instead of a flat "malformed";
+  `runDeterministicFallback` for provider-unavailable degradation; `finalAnswerSchema`
+  extended with `pendingConfirmation`/`eventCards`/`degraded` (additive, B1
+  scripts still validate unchanged); `createDefaultToolRegistry` now accepts
+  injectable real executors (D-050).
+- **apps/api/src/modules/agent/** (new, 29 integration tests against real Postgres
+  + the real HTTP endpoint): `tools.ts` wires all 7 tools to
+  `listPublicEvents`/`getPublicEventDetail`/`listReviews`/`createHold`/`checkout`/
+  `requestRefund`/`getSalesSummary` — never a second copy of their logic;
+  `confirmation.ts` is the server-verified confirmation gate (see
+  `docs/PART_B_SECURITY.md`); `conversation.ts` persists/replays/isolates
+  conversations; `provider.ts` builds the real `AI_PROVIDER`-configured model
+  (mock by default, zero API key); `rateLimiter.ts`; `router.ts` exposes
+  `POST /agent/chat` + `GET /me/conversations[/:id]`, mounted behind `requireAuth`
+  exactly like every other route.
+- **Security verified by real test, not just by design:** a model-hallucinated
+  `userId` tool-call argument is ignored (both at the `packages/agent` loop level
+  and through the real HTTP endpoint); an attendee's `sales_summary` call is
+  rejected by the real permission check with no data leaked; a staff member
+  cannot use the agent to refund their own order (the order is left `PAID`,
+  untouched); a worst-case scripted scenario — the model reading a malicious
+  review and immediately attempting `cancel_order(confirm: true)` with no prior
+  ask and no human message at all — still leaves the victim's order untouched,
+  because there is no live pending confirmation and no real "yes" to classify.
+- **Confirmation state machine verified under real concurrency:** a genuinely
+  concurrent double-confirm (`Promise.all`, both at the `evaluateConfirmation`
+  level and at the full `purchase` tool level) produces exactly one `Order`/
+  `Payment`/`Ticket` row, DB-state-checked, not just HTTP-status-checked — this
+  works by both racing callers reusing the identical stored idempotency key
+  against Part A's own already-regression-tested idempotency primitives, not by
+  any new locking built for Part B (see D-052).
+- **Reliability verified through the real HTTP endpoint:** a scripted transient
+  429 is retried and still succeeds; `quota_exceeded` is never retried and
+  degrades via the real deterministic fallback (a genuine database search, not
+  an invented answer); a provider failure with no matching fallback intent
+  degrades honestly with no `answer` field at all; the per-user rate limiter
+  actually trips in a real test; conversation replay caps itself at the most
+  recent 40 messages rather than an unbounded history.
+- **One real bug found and fixed by a test, not by inspection:** `appendMessages`
+  originally batched a turn's messages into one `createMany` inside a
+  transaction; Postgres freezes `now()` per transaction, so every row shared an
+  identical timestamp, and cuid2 ids aren't a safe same-millisecond tie-break —
+  a conversation could replay its USER/ASSISTANT messages out of order. Fixed by
+  assigning each row in a batch an explicit, strictly increasing timestamp (D-056).
+- **Tests — final counts, all actually run:** `packages/agent` 96/96 (49 new);
+  `apps/api` 183/183 (149 Part A regression + 29 new agent integration + 5
+  reliability, zero regressions); `npm run typecheck` clean across all 5
+  workspaces.
+- **Docs:** `docs/PART_B_ARCHITECTURE.md`, `docs/PART_B_SECURITY.md`,
+  `docs/PART_B_RELIABILITY.md` (new); `docs/DECISIONS.md` D-050–D-057;
+  `docs/ASSESSMENT_REQUIREMENTS.md` Part B rows updated against real tests only.
+- **Commit hashes:** `a5fa930` feat(db) conversation/confirmation schema;
+  `003648b` feat(agent) classifier/grounding/fallback/retry; `691467f`
+  feat(shared) confirmation-gated output schemas; `cdf67a8` feat(agent) executor
+  injection; `3242f7f` feat(api) real tool wiring; `a33d141` refactor(api)
+  injectable provider for tests; `74e6598` test(api) tool/confirmation/chat
+  integration tests; `be2377f` test(api) reliability/context-limit tests; doc
+  commit recorded immediately below.
+- **Remaining limitations, stated honestly (none mandatory for this milestone):**
+  no token-aware context summarization (recency-window truncation only); the
+  rate limiter is process-local, not distributed-safe; `NemotronProvider` has
+  never been run against a real endpoint (no API key used anywhere in this
+  work, by design); the deterministic fallback covers exactly one intent
+  (`search_events`) and explicitly does not cover "show my orders" (not one of
+  the 7 required tools) or event-detail lookups (need real reference
+  resolution) — see D-055. B5 (the eval harness) and the B6 UI redesign have not
+  been started, per the candidate's explicit instruction to stop here.
+
+---
+
+## Stage B5 — Agent evaluation harness (2026-11-01)
+
+- **Task:** build a reproducible, deterministic evaluation suite for the agent — ≥20 cases across
+  the 6 required categories (search, aggregation, actions+confirmation, grounding/no-data,
+  reliability, adversarial, including all 5 required adversarial scenarios), real deterministic
+  scoring against real database state (never "it returned 200"), metrics/reporting, `npm run eval`,
+  CI integration. Mock provider only — no API key required anywhere in this stage.
+- **Status:** Done. 20/20 cases passing, real run, verified twice for stability.
+- **Architecture:** data lives in `evals/cases/*.json` (one file per case, Zod-validated); the
+  runner lives at `apps/api/src/evals/runner.ts` and drives each case's conversation by calling
+  `runAgentTurn` directly (not through `/agent/chat` over HTTP — see D-058) with the real tool
+  registry wired to Part A's real services, a real `AgentConversation` row for FK correctness, and
+  a new eval-only `EvalProvider` (D-059) that behaves exactly like `MockProvider` plus one feature:
+  a tool-call argument can be `{"$lastToolResult": "fieldName"}`, resolved from the most recent real
+  tool result already in the conversation — needed because confirmation-flow cases (`purchase`,
+  `cancel_order`) must reference a hold/order id that only exists once an earlier step in the same
+  scripted conversation has actually run against the database.
+- **Seeding** (`apps/api/src/evals/seed.ts`) is a fixed, 8-variant vocabulary of steps
+  (organiser/venue/event/ticketTier/user/membership/review/order), each mapping to one existing
+  `apps/api/test/helpers/fixtures.ts` call — not a generic DSL (D-060). `{{ref}}` tokens in a case's
+  `mockScript`/`expectations` resolve to real seeded ids; `{{now}}`/`{{now+7d}}` resolve against the
+  same `now` the seed's own relative `startsAt` offsets used.
+- **Scoring** (`apps/api/src/evals/checkers.ts` + the runner): a case passes only if every declared
+  tool-call, outcome/answer, citation-grounding, retry-count, AND real-database-state expectation
+  holds together — any one failing fails the case, regardless of HTTP-equivalent status. `dbChecks`
+  may carry `afterTurn: N` to assert an intermediate conversation state (D-061) — used by
+  actions-10/adversarial-17 to prove no order exists yet after an unconfirmed first turn.
+- **Metrics**: pulled from each case's real `AgentTrace` — overall/per-category pass rate, mean
+  tokens in/out (explicitly labelled estimated/mock-supplied, never presented as a real cost — see
+  D-059's sibling note and `docs/PART_B_EVALUATION.md`), p50/p95 latency (computed by sorting, not
+  averaging), mean steps/case, total provider retries, tool success rate.
+- **Real bug found and fixed while authoring the cases, not by inspection:** `reliability-15`'s
+  first draft asserted the deterministic fallback's search result by event title alone — the
+  fallback has no category filter, only a city/near-phrase extractor, so against a database that
+  already has other published events (e.g. this machine's own demo seed data) the assertion was
+  genuinely flaky depending on what else existed. Fixed by seeding a venue with a uniquely-named
+  city (`Zzyzxville`) and phrasing the user message to match the fallback's `near <city>` pattern,
+  making the case deterministic regardless of any other data present — a real eval-authoring defect,
+  not a product defect (confirmed by first finding the mismatch, then tracing it to the fallback's
+  documented, honest scope limit — see D-055 — not a bug in the fallback itself).
+- **Tests — final counts, all actually run just now:** `npm run eval` — **20/20 passing** (run
+  twice for stability, identical result both times); full `packages/agent` suite 96/96; full
+  `apps/api` suite 183/183 (zero regression); `npm run typecheck` clean across all 5 workspaces.
+- **CI:** `.github/workflows/ci.yml` runs `npm run eval` immediately after `npm run test`, reusing
+  the same Postgres/Redis service containers — a clean addition, the whole suite completes in
+  roughly a second locally.
+- **Docs:** `docs/PART_B_EVALUATION.md` (new); `docs/DECISIONS.md` D-058–D-061;
+  `docs/ASSESSMENT_REQUIREMENTS.md`'s Part B eval-harness and adversarial-scenario rows moved to
+  Verified with real cases cited; `evals/results/sample-run.{json,md}` committed as the required
+  sample report (the full timestamped-run pattern is gitignored so repeat local runs don't
+  accumulate in the repo).
+- **Remaining limitations, stated honestly:** `toolCalls` expectations check presence/success, not
+  exact arguments (the trace never records raw arguments by design — nothing finer to assert
+  against); AD2's "3 ambiguous event matches → clarifying question" wasn't given its own dedicated
+  case (the identical ask-don't-guess mechanism is already proven for confirmation ambiguity and for
+  `sales_summary`'s multi-organiser case); AD3 (Hinglish) is verified at the harness level only — no
+  real model was run to verify it actually extracts the right parameters from literal Hinglish text.
+  B6 (the premium frontend redesign) has not been started.
+
+---
+
+## Stage B6 — Premium frontend redesign (2026-11-01)
+
+- **Task:** a complete visual redesign of `apps/web` — design tokens, a reusable component set, a
+  real landing page, a premium AI assistant chat UI consuming B2-B4's `/agent/chat`/`/me/conversations`
+  endpoints, polish across every existing Part A page, responsive/accessibility verification, and
+  real Playwright E2E across the full discover→chat→confirm→purchase flow. No backend business logic
+  changes except one real gap found and fixed while producing the required E2E verification.
+- **Status:** Done. Verified by actually running the app and looking at real screenshots at three
+  breakpoints, not by reading the code.
+- **Design system** (`docs/FRONTEND_DESIGN_SYSTEM.md`): replaces the prior ad hoc inline-style-object
+  approach (`lib/styles.ts`, now deleted — nothing referenced it after the redesign) with
+  `apps/web/src/app/globals.css` (CSS custom properties for color/typography/spacing/radii/shadows,
+  real `:hover`/`:focus-visible`/`@media` rules — none of which inline React styles can express) and
+  a small component set under `apps/web/src/components/ui/` (Button, Card, Badge, Field/TextInput/
+  TextArea/Select, EmptyState/ErrorBanner/Skeleton, EventCard). No new dependency — deliberately a
+  plain system serif/sans pairing rather than `next/font/google`, for zero build-time network
+  dependency (see docs/FRONTEND_DESIGN_SYSTEM.md). Palette: deep charcoal canvas, warm off-white
+  text, one amber accent — chosen over a blue/purple "AI product" look since this is a ticketing
+  brand first.
+- **Landing page** (`apps/web/src/app/page.tsx`, full rewrite): real nav with a working mobile menu,
+  hero, a "Happening now" section backed by the real `GET /events` endpoint (loading/empty/error
+  states; events with no image field get a deterministic per-id gradient treatment rather than a
+  fake photo — see D-04x below), an AI-discovery section whose example prompts route into a
+  pre-filled, auto-sent chat turn, how-it-works, a capabilities section limited to true claims, and a
+  complete footer.
+- **AI assistant** (new route `/assistant`): conversation sidebar from `GET /me/conversations`, a
+  message thread rendering real `toolExecutionSummary` steps and `[event:ID]`/`[review:ID]` citations
+  as actual links, and a confirmation card for `purchase`/`cancel_order`. The card's Confirm/Cancel
+  controls send the literal `"Yes"`/`"No"` as the next `/agent/chat` message — there is no separate
+  confirm endpoint, because the real server-side gate (B3) is a deterministic classifier over the
+  next real human message plus a live `PendingConfirmation` row, not a button the client can call
+  directly. This is a correctness requirement from the mega-prompt ("the frontend must reflect the
+  server's confirmation state"), not a design choice.
+- **Real gap found and fixed while producing the required E2E verification, not by inspection:** the
+  no-API-key default provider (`createConfiguredProvider()`) returned one fixed "I'm running in demo
+  mode" string for every single message, so the live app had nothing real to screenshot and no way to
+  demonstrate B2-B4's actual tool/confirmation pipeline without a paid Nemotron key. Fixed by adding
+  `DemoProvider` (`apps/api/src/modules/agent/demoProvider.ts`) — a small, honestly-limited,
+  pattern-matching stand-in (distinct from the deterministic `MockProvider` tests/evals use) that
+  recognizes a few plain-English intents (search, "book that", an unambiguous confirmation — reusing
+  the real `classifyConfirmationIntent`) and drives genuine `tool_calls` through the exact same
+  registry/dispatch/confirmation path a real model would. This is a demo-quality fix: every tool call
+  it issues still goes through full real authorization regardless of what this "model" decides to
+  call. Verified via a real Playwright run: search → grounded event cards → "book the first one" →
+  real confirmation card → "Yes" → real order created and visible on `/orders`.
+- **Polished every existing Part A page** (catalogue, event detail, login/register, orders, organiser
+  dashboard, venues/seat-map management — preserving the existing dropdown state-sync fix exactly —
+  events, sales reports, check-in, refunds, audit log) with the new component set, with zero business-
+  logic changes. Event detail gained a live hold-expiry countdown (ticks every second, auto-releases
+  the UI state at zero) and a price breakdown above the hold/checkout actions.
+- **Responsive/accessibility, verified with real Playwright screenshots at 375/768/1440px:** no
+  horizontal overflow at any breakpoint on the catalogue, organiser dashboard, or assistant pages; a
+  real functional mobile nav menu (not just a squished desktop layout); visible amber focus rings on
+  keyboard tab (checked by pressing Tab and screenshotting, not just reading the CSS); every form
+  input has an associated `<label for>`.
+- **Frontend E2E, all real app + real Postgres, verified via actual screenshots inspected at each
+  step:** landing page → real featured events → login → assistant → "Find comedy shows in Pune" →
+  grounded event cards with citations and tool-activity steps → "Book the first one" → confirmation
+  card with a live expiry countdown → "Yes, confirm" → real order created, verified both in the chat
+  UI and on `/orders`. Also verified: an ambiguous confirmation reply ("Yes, but for another event")
+  does not execute anything.
+- **Honestly-documented E2E gap:** a declined-payment path cannot be demonstrated through the chat UI
+  — the agent's `purchase` tool always passes the fake provider's `"success"` scenario (there is no
+  real payment-method collection anywhere in this app, by design since Stage 2.4), so decline/timeout
+  are only reachable via the direct API's `X-Payment-Scenario` header, already exercised in the
+  backend test suite (`apps/api/test/orders/checkout.test.ts`), not through natural conversation. Not
+  a defect — a consequence of the already-documented fake-payment design.
+- **Tests — final counts, all actually run just now:** full `apps/api` suite 183/183 (zero
+  regression from the `DemoProvider` change); full `packages/agent` suite 96/96; `npm run eval`
+  20/20 (zero regression); `npm run typecheck` clean across all 5 workspaces; `apps/api` production
+  build clean; `apps/web` production build clean (16 routes, including the new `/assistant`).
+- **Docs:** `docs/FRONTEND_DESIGN_SYSTEM.md` (new), `docs/PART_B_FINAL_REPORT.md` (new, synthesizes
+  B1-B6), `docs/DECISIONS.md` (D-062–D-065: the design-token/CSS approach, the `DemoProvider` fix,
+  and the image-fallback treatment). `docs/ASSESSMENT_REQUIREMENTS.md` is intentionally untouched by
+  this stage — it tracks the PDF's own requirement list, and the premium frontend redesign is the
+  candidate's own added milestone, not a PDF-defined row (the PDF's own "B6" label refers to the
+  eval-harness categories, already covered in Stage B5 — a naming collision with this stage's own
+  "B6" convention worth flagging, not a tracking gap).
+- **Remaining limitations, stated honestly:** no automated Playwright suite is committed/wired into
+  CI (manual scripts only, matching this project's established pattern since Stage 2.8); conversation
+  history reloaded from `GET /me/conversations/:id` shows plain message text only — citations,
+  event cards, and tool-activity steps are not persisted per-message (only the raw provider-message
+  transcript is, by B3's design), so they render live for the current session only, not retroactively
+  on reload; declined-payment/expired-hold paths are demonstrable through the existing Part A UI
+  (checkout page / hold countdown) but not through the agent chat, for the reason above.
+
+---
+
+## Stage — UI redesign audit: premium hero, 3D/immersive evaluation (2026-11-01)
+
+- **Task:** a dedicated visual-quality milestone, triggered by explicit feedback that the B6 landing
+  page in particular did not yet meet the "premium, futuristic, immersive" bar — most pointedly the
+  hero, which needed a more art-directed, possibly-3D treatment rather than flat editorial text.
+- **Status:** Done. Full detail, before/after evidence, and every measurement in
+  `docs/UI_REDESIGN_AUDIT.md` — this entry is a summary.
+- **Honest starting assessment:** a fresh look (screenshots taken before any code was written, not
+  assumed acceptable because B6 had shipped) found four real weaknesses: a flat, imageless hero; a
+  large dead void in the assistant's welcome state; a sparse one-card organiser dashboard; and an
+  event-detail page with zero visual continuity from the catalogue card that led to it.
+- **Hero redesign:** replaced the flat two-column layout with a CSS-only perspective field of real
+  upcoming events rendered as floating "ticket" cards (dashed perforation, real title/date/price),
+  layered amber/violet glow, a grain overlay, and pointer-driven parallax. Evaluated React Three
+  Fiber honestly and chose CSS instead — see `docs/DECISIONS.md` D-066 for the full reasoning
+  (bundle size, WebGL-availability risk, and lighting/material investment needed to avoid a generic
+  rotating-object look, versus zero-dependency CSS transforms that measured 98-100 on every
+  Lighthouse category). `prefers-reduced-motion` is respected by skipping both the float animation
+  and the pointer listener — verified via `getComputedStyle` under Playwright's reduced-motion
+  emulation, not just read from the CSS.
+- **Other polish:** assistant welcome state now centers around a glowing brand mark instead of a
+  void; conversations get a real title derived from their opening message (D-067 — were always
+  "Untitled conversation" before); the organiser dashboard's flat button row became a tile grid with
+  one-line descriptions; event detail gained the same per-event gradient banner used on catalogue
+  cards, plus a fixed, properly-formatted date (was a raw `toLocaleString()` with seconds).
+- **Two genuine, previously-uncaught bugs found via real production-build verification** (not
+  introduced by this milestone, pre-existing): (1) `apps/api/src/server.ts`'s `.env` path resolution
+  was `__dirname`-relative and silently broke under `node dist/src/server.js` (one directory deeper
+  than `tsx watch src/server.ts`) — fixed by anchoring on `process.cwd()` instead (D-068); (2) a real
+  WCAG AA contrast failure (3.73:1, footer headings) and a missing favicon (a real 404), both caught
+  by actually running Lighthouse against the real `next build`/`next start` output for the first time
+  in this project's history — both fixed and re-verified at Lighthouse score 100.
+- **Responsive:** all 7 required viewports (320×720 through 1920×1080) × 2 pages = 14 checks, zero
+  horizontal overflow, verified programmatically. Functional mobile nav confirmed via screenshot.
+- **Lighthouse (production build):** landing desktop 100/100/100/100; landing mobile 98/100/100/100;
+  assistant desktop 100/100/100/100.
+- **Functional audit:** 14/15 Playwright checks passed outright; the one failure was a timing issue
+  in the test script itself (confirmed by a follow-up debug run that the page genuinely works), not a
+  product defect. Verified with real DB-state assertions, not just HTTP status: an ambiguous
+  confirmation reply creates no order (`/me/orders` count checked before/after); an explicit "Yes"
+  completes a real purchase.
+- **Tests — final counts, all run just now:** `apps/api` 183/183; `packages/agent` 96/96;
+  `npm run eval` 20/20 (unaffected, as expected); `npm run typecheck` clean across all 5 workspaces;
+  both production builds clean; `prisma migrate status` up to date; git clean, no secrets/PDF/docx
+  tracked.
+- **Docs:** `docs/UI_REDESIGN_AUDIT.md` (new), `docs/DECISIONS.md` D-066–D-068.
+- **Remaining limitations, stated honestly:** `node dist/src/server.js` still doesn't run end to end
+  — a separate, pre-existing packaging gap across `packages/db`/`shared`/`agent` (raw `.ts` `main`
+  fields, incompatible with plain `node`), documented in D-068 as real but out of scope for a
+  UI-focused milestone; no automated visual-regression or axe-core tooling in CI (manual
+  Playwright + Lighthouse only, matching this project's established pattern).
+- **Commit hashes:** `3d01feb`, `30df5a7`, `6c77bca`, and the doc commit recorded immediately after
+  this entry.
+
+---
+
+## Stage — Independent review, fixes and Part C (2026-11-02)
+
+- **Task:** check the build against the PDF by running it rather than reading its docs, prove suspected bugs with failing tests, fix them, improve the UI, and write Part C.
+- **Found by reproducing against the code as it stood:**
+  - Checking out one hold under different Idempotency-Keys at once double-charged and issued extra tickets (15 of 15 trials). The earlier concurrency tests only used one key.
+  - Releasing a hold during its checkout oversold GA inventory (24 of 30 trials). Checkout ignored the result of its conditional hold update.
+  - No seated purchase could work: `GET /events/:id/seats` returned `EventSeat.id` where `POST /holds` expects `Seat.id`. Earlier checks only drove GA through the UI.
+  - A refunded seat couldn't be resold, because `tickets.event_seat_id` was globally unique.
+  - A timed-out payment whose client never retried stayed `PENDING_PAYMENT` forever, and after hold expiry a retry got a bare 409 over a charge that had gone through.
+  - A refund key reused on another order replayed the first order's refund and left the second unrefunded.
+  - A repeat cancel after a crash between its two steps returned early, leaving paid orders unrefunded.
+  - The agent could answer its own confirmation in one turn, using a "yes" the human said about something else, and refund an order. `evaluateConfirmation` never checked that the confirmation existed before the turn began.
+  - Chat had no token budget on the real endpoint, partial results had no answer text, fabricated citations stayed in the answer's prose, and a trimmed history could start on an orphaned tool result, which real APIs reject.
+  - The API contract wasn't served as written (`POST /events`, `PATCH /events/:id`, `POST /events/:id/cancel`, `GET /audit`, snake_case bodies, `hold_id`/`expires_at`, optional key on holds), and admins had no way to manage staff.
+  - `holds.test.ts` failed on the first run after seeding, because the global sweep counted the seed's expired hold. That's a likely cause of some of the "non-reproducing flakiness" recorded in earlier stages.
+- **Fixed, each with a regression test:** `apps/api/test/regressions/{money-and-inventory,agent-safety}.test.ts`. See docs/DECISIONS.md D-069 to D-074.
+- **Added:** staff management, event on-sale/complete, derived SOLD_OUT, a background sweep and payment reconciliation, `GET /holds`, `/organisers/:id/orders`, `list_my_orders`, full OpenAPI paths, `npm run setup`, DESIGN.md.
+- **Verified from a brand-new copy, following the README exactly:** typecheck clean; 325 tests passing, twice in a row (227 API, 98 agent); `npm run eval` 31 of 31; both production builds; contract calls by curl. Real model (`qwen3.5:9b`, local, one run): 12 of 23.
+- **Evals:** 31 cases. Argument checks, forbidden tools, cited-record prefixes, a whole-database "unchanged" check, per-case score and estimated cost, and token counts measured from real payloads instead of scripted numbers. First real-model report, on a local model through Ollama.
+- **Frontend:** browse filters in the URL, a two-column event page with a real seat map, hold restore on reload, a timeout-aware checkout, ticket cards with partial refunds, an assistant with server-driven confirmation and restored history, and an organiser shell with overview, orders and refunds, team, and a sales chart. Patterns referenced from Mobbin; see docs/FRONTEND_DESIGN_SYSTEM.md.
+- **Found while verifying, in the fixes themselves:** the first untrusted-content rule also stopped normal bookings from asking for confirmation (caught by driving the assistant in a browser, then narrowed); a repair instruction was whitelisting the invented price it was rejecting; `npm run eval -- --real` dropped its flags; a seed change broke the production type build.
+- **Commit hash:** none. This copy of the project has no `.git` directory, so these changes are uncommitted.
+
+## Frontend finish pass (2026-11-02)
+
+- **Status:** Done. Styling, the landing page and generated event art only. No booking logic or API changes. See docs/DECISIONS.md D-075.
+- **Also fixed:** the README injection steps, which could not work in demo mode because search hides completed events.
+- **Commit hash:** none. This copy of the project has no `.git` directory.
+
 <!-- Add new entries above this line, most recent first is NOT required — keep chronological. -->

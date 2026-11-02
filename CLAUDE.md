@@ -9,8 +9,8 @@ and written design notes (Part C).
 - **Candidate:** Vinay
 - **Deadline:** Monday, 2 November 2026, 11:59 PM IST
 - **Expected core effort:** ~12–16 focused hours (per the assessment PDF; stretch goals optional)
-- **Source of truth:** `agenticgenie-vinay-ai-engineer-assessment.pdf` (local only, NEVER committed —
-  it is confidential and listed in `.gitignore`). If anything in this repo's docs conflicts with the
+- **Source of truth:** `agenticgenie-ai-engineer-assessment.pdf` (local only, NEVER committed —
+  it is confidential, and `.gitignore` excludes every `*.pdf`). If anything in this repo's docs conflicts with the
   PDF, the PDF wins — flag the conflict and fix the docs.
 - Working requirements checklist: [docs/ASSESSMENT_REQUIREMENTS.md](docs/ASSESSMENT_REQUIREMENTS.md).
   Re-read the PDF directly only to verify a specific requirement, not routinely.
@@ -24,7 +24,7 @@ and written design notes (Part C).
 | Validation | Zod |
 | ORM | Prisma |
 | Database | PostgreSQL (source of truth for inventory/orders/payments/permissions — never Redis) |
-| Background jobs | Redis + BullMQ (only where justified, e.g. hold-expiry sweeper) |
+| Background jobs | In-process sweep (`apps/api/src/jobs.ts`). Redis + BullMQ provisioned but not justified so far |
 | AI harness | Custom TypeScript implementation (no LangChain AgentExecutor / CrewAI — we write the loop) |
 | Real AI provider | NVIDIA Nemotron via an OpenAI-compatible API (env-configured, no hardcoded keys) |
 | Mock AI provider | Deterministic scripted provider (no API key, simulates 429/quota/timeout/malformed JSON) |
@@ -103,8 +103,7 @@ is tested. A requirement is only "Verified" once an automated test actually runs
   `chore: ...`.
 - Small, focused commits — never one giant final commit.
 - Run relevant tests before committing; don't commit code known to be broken.
-- Never commit `.env`, secrets, or `agenticgenie-vinay-ai-engineer-assessment.pdf` /
-  `ticketbooking.docx` (both gitignored — the PDF is confidential, the docx is the candidate's own
+- Never commit `.env`, secrets, or the assessment PDF / `ticketbooking.docx` (both gitignored — the PDF is confidential, the docx is the candidate's own
   paraphrase of it and kept local for the same reason).
 - Update `docs/PROGRESS.md` with the commit hash after each meaningful stage.
 - Do not push to a remote without explicit approval.
@@ -143,5 +142,6 @@ codebase's details.
 
 ## Current status
 
-See [docs/PROGRESS.md](docs/PROGRESS.md) for the live log. As of now: Stage 0 (audit + docs) in
-progress; no application code written yet.
+See [docs/PROGRESS.md](docs/PROGRESS.md) for the live log. Parts A, B and C are written. Not built from
+the planned stack, and not required by the PDF: BullMQ jobs (an in-process sweep is enough), Playwright
+in CI, k6, a Postman collection, Three.js.

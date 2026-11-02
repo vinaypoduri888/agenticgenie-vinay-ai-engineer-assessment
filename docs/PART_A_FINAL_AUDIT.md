@@ -1,5 +1,7 @@
 # Part A — Independent Final Audit
 
+> **Partly out of date (2026-11-02).** Written before the independent review recorded at the end of [PROGRESS.md](PROGRESS.md), which reproduced and fixed real bugs this document doesn't know about. Where they disagree, the code, the regression tests in `apps/api/test/regressions/`, and DESIGN.md are correct.
+
 Conducted as a skeptical, from-scratch re-verification of the "Part A complete" report at git tip
 `6c38cc8`, per the candidate's explicit audit request. Every claim below was re-derived by actually
 running commands and inspecting real database state in this pass — not by citing the prior report.

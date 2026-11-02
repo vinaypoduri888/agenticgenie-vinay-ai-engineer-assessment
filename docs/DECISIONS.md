@@ -736,4 +736,407 @@ real running API and seeded database — not just typechecked or eyeballed:
   `grep` across all 19 real call sites), never by a test that forces a real failure and checks the
   row didn't survive.
 
+### D-045: `packages/agent` never imports `apps/api` — real tool `execute()` lives in `apps/api`, not here
+
+- **Decision:** `@agenticgenie/agent` depends only on `@agenticgenie/shared` and `zod`. It defines
+  `ToolDefinition`, `ToolRegistry`, the loop, the providers, and the tracer — but no tool registered
+  in `tools/catalogue.ts` has an `execute` function yet. Stage B2 will build a second registry (or
+  populate this one) inside `apps/api` — e.g. `apps/api/src/modules/agent/tools.ts` — that imports
+  the real Part A service functions (`events.listPublicEvents`, `holds.createHold`,
+  `orders.checkout`, `refunds.requestRefund`, `reports.getSalesSummary`, ...) and supplies them as
+  each tool's `execute`.
+- **Why we chose it:** `apps/*` depends on `packages/*` in this monorepo, never the other way —
+  `packages/agent` importing from `apps/api` would invert that direction and create exactly the kind
+  of tangled dependency graph a modular-monolith layout is meant to avoid (see CLAUDE.md's planned
+  architecture: "agent never talks to Postgres/Redis directly; it calls the api service layer"). A
+  generic agent package that only knows Zod schemas and a `ToolContext` shape can be tested in full
+  isolation (47 tests, 0 database dependency) and is trivially reusable if `apps/api`'s internals
+  ever change shape.
+- **Trade-off:** nothing in Part A's web of permission/idempotency/audit guarantees is exercised by
+  this stage's tests — that's deliberate (B1 is architecture, not integration) and is exactly what
+  Stage B2 closes. The seven tools are registered with complete schemas and metadata now so B2 is
+  "write `execute`," not "redesign the contract."
+
+### D-046: A registered tool with no `execute` is an honest `NOT_IMPLEMENTED`, never a crash or a fake success
+
+- **Decision:** `tools/dispatch.ts` checks `definition.execute` before calling it; if absent, it
+  returns `{ success: false, error: { code: "NOT_IMPLEMENTED", ... } }` through the exact same
+  `ToolDispatchResult` shape a real failure would use — not a thrown exception, not a stub value that
+  looks like a real answer.
+- **Why we chose it:** the loop (and, later, the model) must never be able to tell the difference
+  between "this tool doesn't exist," "this tool failed," and "this tool isn't wired up yet" by
+  crashing in three different ways — they're all just an error the agent can react to gracefully
+  (e.g. apologize and suggest trying something else), which is exactly the behavior Stage B2's real
+  failures need too. Building this path now means Stage B2 doesn't introduce new error-shape
+  conventions — it just starts returning `success: true` instead.
+
+### D-047: `cancel_order` maps onto Part A's `requestRefund`, not a new cancellation state machine
+
+- **Decision:** the `cancel_order(order_id, confirm)` tool's Stage B2 implementation will call
+  `refunds.requestRefund` for every currently-`VALID` ticket on the order (a full refund), the same
+  operation the `/orders/:id/refund` endpoint already performs and the frontend's "cancel my order"
+  action already drives.
+- **Why we chose it:** Part A's `Order.status` machine only has `PENDING_PAYMENT → PAID →
+  PARTIALLY_REFUNDED | REFUNDED | DECLINED` — checkout resolves synchronously (see
+  docs/DECISIONS.md's three-phase checkout entries), so there is no "pending, not yet committed"
+  order state for a tool to cancel out from under; the only sense in which an attendee "cancels an
+  order" in this system is requesting a refund of what they already paid for. Reusing the existing,
+  already-tested, already-permission-checked refund path means `cancel_order` inherits every
+  guarantee `requestRefund` already has (self-refund restriction, refund-window enforcement,
+  idempotency) for free in B2, rather than needing its own.
+
+### D-048: Agent execution traces never record raw tool-call arguments or raw provider content
+
+- **Decision:** `tracing/tracer.ts`'s `StepTrace`/`ToolCallTrace` only ever record a tool's name,
+  duration, success flag, retry count, and an error *code* — never the arguments passed to it, the
+  raw provider response text, or a raw thrown-error message. Any string that is recorded is passed
+  through a `redact()` helper that strips common secret-shaped substrings (`sk-...`, `ghp_...`, JWTs,
+  bearer tokens) as a defensive backstop.
+- **Why we chose it:** a tool-call argument can be something a user reasonably considers private (a
+  specific seat id, an order id, a date range tied to their own purchase history) without being a
+  "secret" in the credentials sense — there's no reason diagnostic telemetry needs to retain it once
+  the call is done. This trace is explicitly NOT Part A's audit log: `writeAuditLog` already owns the
+  durable, access-controlled, transactional record of what actually changed (see the Part A audit-log
+  decisions above); this tracer is operational telemetry for running the agent itself (latency spent,
+  tokens spent, which tools got called, how the turn ended), and keeping it argument-free means it
+  can eventually be exported/logged more freely than the audit log ever should be.
+
+### D-049: The loop's resource-limit checks run before honoring an otherwise-valid final answer
+
+- **Decision:** `core/loop.ts` checks the cumulative token budget immediately after a response comes
+  back from the provider — even a well-formed, schema-valid final answer is rejected (replaced with a
+  `partial`/`token_budget_exceeded` result) if accepting it would mean the turn's token spend already
+  exceeded its budget. The one bounded repair attempt for malformed output is tracked per TURN, not
+  per step, so a model that fails to self-correct once doesn't get a fresh repair budget on every
+  subsequent step.
+- **Why we chose it:** the PDF's wording is specific — "graceful partial answer when budget exhausted"
+  and "never claim unconfirmed action succeeded" — which reads as a constraint on the *loop's own
+  behavior*, not just the model's. A budget that can be silently exceeded by one token right before
+  the model happens to produce a good answer isn't really a budget. Tracking repair per-turn (rather
+  than resetting it every step) treats "the model can't produce valid structured output" as a single
+  failure mode worth one correction attempt total, not a retry budget that could otherwise let a
+  persistently malformed model consume the entire step/token budget doing nothing but failing to
+  repair itself.
+
+### D-050: Real tool implementations are injected into the registry, not registered a second time
+
+- **Decision:** `packages/agent`'s `createDefaultToolRegistry` now takes an
+  optional `executors` map; `apps/api` calls it with real, service-backed
+  `execute` functions (`apps/api/src/modules/agent/tools.ts`), while
+  `packages/agent`'s own tests still call it with none and get B1's honest
+  "not implemented" behavior.
+- **Why we chose it:** `ToolRegistry.register()` throws on a duplicate name, so
+  there was no way to "fill in" a tool B1 already registered without either
+  inverting the dependency direction (packages/agent importing apps/api — wrong
+  way round) or duplicating all seven tools' schemas/descriptions/metadata a
+  second time in `apps/api` just to attach an `execute`. Executor injection keeps
+  one source of truth for the metadata and one seam for the implementation.
+
+### D-051: `purchase`/`cancel_order` output schemas gained a `NEEDS_CONFIRMATION` status
+
+- **Decision:** both schemas (`packages/shared/src/agent/tools.ts`) became
+  `status: "NEEDS_CONFIRMATION" | ...` discriminated shapes instead of always
+  returning an order-shaped object.
+- **Why we chose it:** B1 designed these schemas before the confirmation state
+  machine existed, assuming every call either succeeds or throws. Once
+  `purchase`/`cancel_order` need to return "nothing happened yet, please confirm"
+  as a normal, non-error result, the schema has to be able to say that honestly
+  — returning a fake `Order`-shaped object with an invented status would violate
+  the same "never invent data" principle this project applies everywhere else.
+
+### D-052: The confirmation gate is two independent conditions, not one
+
+- **Decision:** `purchase`/`cancel_order` execute only when (1) a live, matching
+  `AgentPendingConfirmation` DB row exists AND (2) the current turn's raw human
+  message passes a deterministic classifier (`classifyConfirmationIntent`). A
+  model's own `confirm: true` tool-call argument satisfies neither condition by
+  itself.
+- **Why we chose it:** the assessment is explicit that "the model cannot confirm
+  its own action" and that "an affirmative response to an unrelated question
+  cannot be interpreted as approval." A model-settable boolean is exactly the
+  kind of self-attestation the project's existing rule — never trust a
+  model-generated permission/identity claim — already forbids; treating `confirm`
+  as an exception to that rule for no good reason would be inconsistent. Using a
+  regex allowlist instead of asking the model "was that really a yes?" removes an
+  entire class of prompt-injection surface (a cleverly-crafted message convincing
+  the model that something ambiguous was actually a confirmation).
+- **Trade-off:** see docs/PART_B_SECURITY.md — a genuinely unusual confirmation
+  phrasing gets rejected safely rather than guessed at.
+- **Concurrency note:** correctness under a genuine race does NOT depend on this
+  function's own atomicity (see the detailed reasoning in docs/PART_B_SECURITY.md
+  §2) — it depends on handing both racing callers the identical, already-stored
+  idempotency key and letting Part A's own (already-regression-tested)
+  idempotency primitives collapse them. This function's conditional updates are
+  real but are a secondary safety/bookkeeping measure, not the mechanism the
+  no-double-charge guarantee actually rests on.
+
+### D-053: `sales_summary` resolves membership itself; ambiguity gets a clarifying question, not a guess
+
+- **Decision:** the tool queries the caller's own `OrganiserMembership` rows
+  directly. Zero → permission error. One → use it. More than one →
+  `NEEDS_CLARIFICATION` listing the real organisation names.
+- **Why we chose it:** the PDF's fixed tool signature for `sales_summary` has no
+  organiser-id argument, and `getSalesSummary` trusts whatever organiserId it's
+  given completely (it's normally shielded by Express's
+  `requireOrganiserMembership` middleware, which doesn't run on the agent's call
+  path). Guessing which organiser a multi-org staff member meant would risk
+  showing the wrong organiser's financial data to the wrong conversation; asking
+  is the same pattern already required for an ambiguous event-booking request
+  elsewhere in Part B's spec.
+
+### D-054: `quota_exceeded`/`auth_error` are never retried; everything else transient is
+
+- **Decision:** `callProviderWithRetry` retries `rate_limited`/`server_error`/
+  `timeout`/`network` with bounded exponential backoff + jitter (honoring a
+  provider-supplied `Retry-After`), but never retries `quota_exceeded` or
+  `auth_error`.
+- **Why we chose it:** a billing or auth failure is permanent for the current
+  turn — retrying it burns the turn's time/attempt budget on something that
+  cannot succeed, delaying the (correct) fallback/degrade path for no benefit.
+  This matches the assessment's own retry-policy table exactly.
+
+### D-055: The deterministic fallback covers exactly one intent, on purpose
+
+- **Decision:** only "search/show events [in city]" → `search_events` is wired as
+  a fallback intent. "Show event details"/"ticket tiers" and "show my orders"
+  (an example in the assessment's own spec) are explicitly NOT implemented.
+- **Why we chose it:** the first two need an event id this fallback has no
+  reliable way to resolve from free text without the model (that's reference
+  resolution); the third isn't one of the seven required tools at all — there is
+  no `list_my_orders` agent tool to fall back to, and inventing one just to serve
+  a fallback path would be unplanned scope, not a fix for a real gap. Documented
+  honestly in docs/PART_B_RELIABILITY.md rather than silently narrowed or
+  over-built with an unreliable heuristic.
+
+### D-056: Each message in a persisted batch gets an explicit, strictly increasing timestamp
+
+- **Decision:** `appendMessages` assigns `createdAt: new Date(base + i)` per row
+  instead of letting Postgres's `now()` default apply.
+- **Why we chose it:** a real bug, caught by a real test (not inspection) —
+  Postgres freezes `now()` for the whole transaction, so every message in one
+  `createMany` batch shared an identical timestamp, and cuid2 ids are only
+  approximately time-sortable, not a safe same-millisecond tie-break. Unlike
+  catalogue pagination (D-013), where same-batch ordering among otherwise-
+  unrelated rows doesn't matter, getting a conversation's USER/ASSISTANT/TOOL
+  messages out of order would corrupt the exact context replayed back to the
+  model on the next turn.
+
+### D-057: The `/agent/chat` rate limiter is process-local, by choice, documented as a limitation
+
+- **Decision:** a plain in-memory `Map`-based sliding window, not Redis-backed.
+- **Why we chose it:** Redis is provisioned in this project (`docker-compose.yml`)
+  but genuinely unused anywhere else (see the Stage-1 decision on this) — standing
+  up a Redis-backed limiter for exactly one endpoint in this stage would be
+  infrastructure this assessment's scope doesn't call for. Honestly documented as
+  not distributed-safe in docs/PART_B_RELIABILITY.md rather than silently
+  presented as production-grade.
+
+### D-058: The eval runner calls `runAgentTurn` directly, not through `/agent/chat` over HTTP
+
+- **Decision:** `apps/api/src/evals/runner.ts` imports `runAgentTurn`, the real tool registry, and
+  the real conversation/confirmation persistence helpers directly, driving each case's conversation
+  in-process rather than issuing `supertest` HTTP requests against `createApp()` the way
+  `apps/api/test/agent/*.test.ts` does.
+- **Why we chose it:** the HTTP endpoint's JSON response deliberately does not expose the full
+  `AgentTrace` (only a redacted `toolExecutionSummary` — see `docs/PART_B_SECURITY.md`'s redaction
+  policy), but the eval harness's metrics (tokens, latency, step count, retry count) need exactly
+  that trace. Calling `runAgentTurn` directly gets the real trace with zero changes to the
+  already-reviewed B2–B4 HTTP contract, while still exercising the real tool implementations (they
+  call Part A's real services via Prisma regardless of whether an Express request framed the call)
+  and the real `AgentPendingConfirmation`/`AgentConversation` database rows. The only thing skipped
+  is Express's own routing/auth-middleware layer, which the eval harness doesn't need to prove (it's
+  already covered by `apps/api/test/agent/chat.test.ts`) and which would have added `supertest`
+  request plumbing with no benefit to what this stage is actually verifying.
+- **Trade-off:** an eval case technically doesn't prove `POST /agent/chat` itself is wired
+  correctly — that remains the HTTP integration tests' job, not this harness's.
+
+### D-059: `EvalProvider` is a new, eval-only sibling of `MockProvider`, not a change to it
+
+- **Decision:** `apps/api/src/evals/provider.ts` reimplements `MockProvider`'s small, deterministic
+  script-consumption contract (~30 lines) rather than extending or modifying
+  `packages/agent/src/providers/mock.ts`, adding exactly one feature: a tool-call argument value may
+  be `{ "$lastToolResult": "fieldName" }`, resolved at call time from the most recent real tool
+  result already in the conversation.
+- **Why we chose it:** confirmation-flow eval cases (`purchase`, `cancel_order`) need to reference a
+  hold or order id that is only created *during* the scripted conversation itself (by an earlier
+  `hold_seats`/`purchase` call hitting the real database) — a fully static script authored ahead of
+  time has no way to know that id. `MockProvider` is B1–B4's own, already-reviewed, already-tested
+  component; changing its contract to support dynamic argument resolution — a feature nothing in the
+  product itself needs — would be scope creep against code that doesn't belong to this stage.
+  Keeping `EvalProvider` entirely inside `apps/api/src/evals/` means B5 adds a new, small,
+  independently-testable file rather than touching reviewed infrastructure.
+
+### D-060: Eval case `seed` is a fixed vocabulary of fixture-helper calls, not a generic DSL
+
+- **Decision:** `apps/api/src/evals/types.ts`'s `seedStepSchema` is a closed, 8-variant
+  discriminated union (`organiser`, `venue`, `event`, `ticketTier`, `user`, `membership`, `review`,
+  `order`); `apps/api/src/evals/seed.ts`'s `applySeed` is a single `switch` mapping each variant
+  directly onto one `apps/api/test/helpers/fixtures.ts` call. Adding a seed need the current 20 cases
+  don't have means adding one more variant and one more `case`, never extending a query language.
+- **Why we chose it:** reusing the exact same fixture helpers every other integration test in this
+  project already relies on means eval-created rows get the exact same `resetFixtures()` cleanup
+  tracking for free, with no separate bookkeeping to get wrong or forget.
+
+### D-061: `dbCheck.afterTurn` lets a case assert an intermediate conversation state
+
+- **Decision:** a `dbChecks` entry may carry an optional `afterTurn: N` (1-indexed), evaluated right
+  after that turn of the conversation completes rather than only once at the very end.
+- **Why we chose it:** the assessment's own spec for case 10 (`purchase`) explicitly requires proving
+  "the first turn produces `needs_confirmation`, NO order exists yet" as a distinct, checkable fact —
+  not an assumption inferred from the final state. Scoping this to one extra, explicit field on a
+  `dbCheck` (rather than, say, letting a case declare several independent sub-conversations) keeps
+  the case format's surface area small while still making the intermediate claim a real, checked
+  assertion instead of an implicit one.
+
+### D-062: Design tokens via plain CSS custom properties, not a UI library or Tailwind
+
+- **Decision:** `apps/web/src/app/globals.css` defines the entire design system (color, typography,
+  spacing, radii, shadows) as CSS custom properties, consumed by a small hand-written component set
+  (`components/ui/`) using plain class names, not a utility framework.
+- **Why we chose it:** the prior inline-React-style-object approach (`lib/styles.ts`) genuinely
+  cannot express `:hover`, `:focus-visible`, or `@media` queries — all required for this stage
+  (hover states, visible focus, responsive breakpoints). Introducing Tailwind or a component library
+  would solve that but adds a real dependency and build-step surface for a one-person take-home
+  project where "do not introduce large libraries unnecessarily" is an explicit instruction. Plain
+  CSS custom properties get the same capability — real pseudo-classes and media queries — with zero
+  new dependencies and a single, auditable stylesheet.
+- **Trade-off:** no scoped styles (global class names must stay disciplined/prefixed by convention),
+  no autogenerated utility classes, so some repetition across pages — acceptable at this project's
+  size.
+
+### D-063: System serif/sans font pairing, not `next/font/google`
+
+- **Decision:** `--font-display`/`--font-body` are system font stacks (`ui-serif`/`ui-sans-serif` with
+  platform fallbacks), not a custom webfont loaded via `next/font/google`.
+- **Why we chose it:** `next/font/google` needs a network fetch at build time; failing that fetch in
+  an unfamiliar CI/sandbox environment would silently break `next build`, which is a worse outcome
+  than a slightly less distinctive typeface. A strong serif-display/sans-body contrast is itself a
+  well-established editorial technique and reads as intentional even on system fonts — verified by
+  screenshot, not just asserted.
+- **Trade-off:** less visually distinctive than a custom typeface; judged not worth the build-time
+  risk for this project's scope.
+
+### D-064: Events with no image get a deterministic per-id gradient, never a stock photo
+
+- **Decision:** `EventCard`'s media area renders one of a small fixed set of gradients, chosen by
+  hashing the event's own id — the same event always renders the same treatment, and nothing is
+  presented as a photo of the actual event.
+- **Why we chose it:** the Part A data model has no event-image field (a real, pre-existing gap —
+  not introduced here), and the instructions are explicit: "If the API has no event image field, use
+  a tasteful, consistent fallback treatment rather than pretending a random image belongs to an
+  event." A random stock photo would misrepresent the event; a solid color would be duller than
+  necessary. A deterministic gradient is honest (never claims to depict anything) and still gives
+  the catalogue visual variety.
+
+### D-065: `DemoProvider` replaces the static demo-mode reply as the no-API-key default
+
+- **Decision:** `apps/api/src/modules/agent/provider.ts`'s no-`AI_PROVIDER` default is now
+  `DemoProvider` (`apps/api/src/modules/agent/demoProvider.ts`) — a small, pattern-matching
+  `ModelProvider` implementation — rather than a `MockProvider` scripted with one fixed canned reply.
+- **Why we chose it:** found while producing B6's required Playwright E2E verification — the fixed
+  reply meant the live app (every manual demo, every screenshot) never showed the agent doing
+  anything real, which would have made the "Playwright E2E across the full discover→chat→confirm→
+  purchase flow" requirement impossible to satisfy honestly without a real, paid Nemotron key (which
+  this project should never require — see D-0xx from B1 on `AI_PROVIDER=mock`'s zero-key guarantee).
+  `DemoProvider` recognizes a handful of plain-English intents via regex (search, "book that", an
+  unambiguous confirmation — delegating to the real `classifyConfirmationIntent`, not a separate
+  heuristic) and emits genuine `tool_calls`, so the entire real pipeline (registry dispatch, the real
+  confirmation gate, real idempotency) runs exactly as it would for a real model.
+- **Why this is not a security concern:** `DemoProvider` sits in the exact same interface slot a real
+  LLM would — it cannot skip any authorization check any more than `MockProvider` or `NemotronProvider`
+  can, because every one of those checks lives in the tool `execute()` functions and the confirmation
+  service, never in the provider. Verified: 183/183 `apps/api` tests and 20/20 eval cases (which use
+  their own precise `MockProvider`/`EvalProvider` scripts, never `DemoProvider`) were unaffected by
+  this change.
+- **Trade-off:** `DemoProvider`'s intent recognition is deliberately narrow (plain regex, no real
+  NLU) — anything it doesn't recognize gets an honest "I can't tell what you mean yet" rather than a
+  guess. This is a demo/UX quality limitation, not a scope gap: a real deployment would set
+  `AI_PROVIDER=nemotron`, which this project already fully supports (B1).
+
+### D-066: The landing-page hero uses a CSS 3D composition, not Three.js/R3F
+
+- **Decision:** the hero's dimensional "floating ticket" field (`components/marketing/HeroVisual.tsx`)
+  is built entirely from CSS `perspective`/`transform3d`/`rotate3d`, layered blurred radial-gradient
+  glows, and a small pointer-move listener that drives parallax via CSS custom properties — no
+  `<canvas>`, no WebGL, no new dependency, despite `CLAUDE.md` pre-approving Three.js + React Three
+  Fiber for exactly this kind of moment.
+- **Why we chose it:** evaluated honestly against the alternative, not reached for reflexively.
+  A real R3F scene for one hero moment on a ticketing app (not a 3D showcase product) adds ~600KB+
+  gzipped for three.js + fiber + drei, a genuine WebGL-availability risk in headless/CI and some
+  mobile browsers, and real lighting/material/camera investment to avoid looking like a generic
+  rotating-object demo — more than this single moment justifies. The CSS approach gets real
+  dimensional depth (verified by screenshot, see `docs/UI_REDESIGN_AUDIT.md`), perfect performance
+  (Lighthouse 98-100 across every category, desktop and mobile, against the real production build),
+  zero WebGL risk, and trivial `prefers-reduced-motion` handling (skip attaching the pointer listener
+  and the float animation entirely — verified via `page.evaluate(getComputedStyle)` under
+  `reducedMotion: "reduce"`, not just reading the CSS).
+- **Trade-off:** less visually extensible than a real 3D scene would be (no true camera movement,
+  no lit materials) — acceptable for a single above-the-fold composition; if a future stage wants a
+  more elaborate 3D product moment, R3F remains available and pre-approved, just not spent here.
+
+### D-067: Conversation titles are derived from the opening message, not editable
+
+- **Decision:** `createConversation` now takes the first user message and stores a truncated
+  (≤48 char) version of it as the conversation's `title`, set once at creation and never
+  re-derived — a conversation's topic can legitimately drift mid-conversation without that being
+  treated as a "wrong" title.
+- **Why we chose it:** found during this UI-polish pass — every conversation in the sidebar read
+  "Untitled conversation" with no way to tell them apart, a real usability gap for the "polished AI
+  product" bar this milestone targets. A derived title needs no new UI (edit/rename controls, a
+  rename endpoint) and costs nothing at read time; purely cosmetic metadata, not a business rule, so
+  it carries none of this project's usual permission/audit concerns.
+
+### D-068: `apps/api`'s `.env` path resolution anchors on `process.cwd()`, not `__dirname`
+
+- **Decision:** `server.ts` now resolves the repo-root `.env` via
+  `path.resolve(process.cwd(), "../../.env")` instead of a `__dirname`-relative
+  `"../../../.env"`.
+- **Why we chose it:** found while actually running `npm start` against a real `npm run build`
+  output for this milestone's Lighthouse work — something no prior stage had actually exercised
+  end to end (every prior "production build" verification only checked that `tsc`/`next build`
+  compiled without errors, never that the compiled output could actually start and serve traffic).
+  The compiled entrypoint sits one directory deeper (`dist/src/server.js` vs `src/server.ts`), so a
+  fixed `__dirname`-relative traversal silently resolved to the wrong path under `node
+  dist/src/server.js` and crashed on missing env vars. `process.cwd()` is stable across both
+  `tsx watch src/server.ts` and `node dist/src/server.js` because both are invoked via
+  `npm run <script> -w apps/api`, which always sets the workspace directory as cwd.
+- **Known remaining gap, not fixed in this milestone:** `node dist/src/server.js` still fails one
+  step later, because `packages/db`'s (and `packages/shared`'s, `packages/agent`'s) `package.json`
+  `main`/`types` point at raw `src/index.ts` — fine for `tsx`'s on-the-fly transpilation, not
+  executable by plain `node`. Properly fixing this means giving every workspace package its own
+  `tsc` build step and switching their `main` fields to compiled output, which is real, separate
+  infrastructure work — out of scope for a UI-redesign milestone. Documented honestly here and in
+  `docs/UI_REDESIGN_AUDIT.md` rather than silently left for someone to discover later; this
+  milestone's Lighthouse/functional verification ran the API via `tsx` (functionally identical to
+  `npm start` for everything except this packaging gap) against the real `next build`/`next start`
+  frontend, which is what actually mattered for this stage's scope.
+
+### D-069: The hold's conditional update decides who owns inventory, and losing it means a refund
+
+Phase 3 of checkout now checks whether `hold ACTIVE -> CONVERTED` matched a row. If not, the hold expired or was released during the charge and its inventory is already back on sale, so the order is refunded rather than issued tickets. Checks earlier in the flow give better errors; this one is what guarantees no overselling. Alternative rejected: holding the hold's row lock across the payment call, which would keep a transaction open during an external call.
+
+### D-070: One charge at a time per order, including across Idempotency-Keys
+
+An idempotency key dedupes retries of one logical request. It says nothing about two different keys for one hold, which is what a double-click across tabs produces. Phase 1, under the event lock, refuses a second charge while another attempt on that order is unresolved, and partial unique indexes on `payments` back that up.
+
+### D-071: Timeouts settle through the provider's ledger, from three places
+
+A retry with the same key, the 30-second sweep, and the user's next `GET /me/orders` can all settle an open checkout, and Phase 3's compare-and-swap lets only one win. No record at the provider means nothing was charged, so it settles as a decline.
+
+### D-072: Confirmation must predate the turn, and server state is what's reported
+
+A pending confirmation only counts if it was created before the current turn began. Any reply other than a clear yes closes it, so a topic change can't leave it alive for a later "yes", and it can't outlive its hold. `needsConfirmation`, `pendingConfirmation` and `actionTaken` in the chat response now come from the database and tool results. The model's claims about them are ignored.
+
+### D-073: Reading third-party text restricts what the same turn can do
+
+After `get_reviews`, every side effect is refused for the rest of the turn. After `get_event`, purchase and cancel may ask but not execute. The two differ because a normal booking must read the event, hold, and then ask; refusing that outright broke the core flow, which only driving it in a browser revealed. Prompt wording and the regex flag aren't relied on for any of this.
+
+### D-074: The contract is served as written, on top of the existing routes
+
+`POST /events`, `PATCH /events/:id`, `POST /events/:id/cancel` and `GET /audit` were reachable only under `/organisers/:id/...`, with camelCase bodies. "May extend, may not omit" means both have to work, so thin routes resolve the organiser from the event or the caller and reuse the same services, and schemas accept both spellings.
+
+### D-075: Geist and a neutral canvas replace the system serif and amber theme
+
+The amber, serif and charcoal look read as a theme rather than a finished product. Tokens now use a near-black canvas, hairline borders, one warm accent and Geist, self-hosted through `@fontsource` so the build still makes no font requests. This replaces D-063, and adds two small dependencies. The ticket stack from D-066 is replaced by a canvas seat map (`SeatField.tsx`), which still needs no WebGL or Three.js. Only styling, the landing page and generated event art changed. No booking logic or API behaviour did.
+
 <!-- Add new decisions below as they're made, each as its own ### D-NNN section. -->
