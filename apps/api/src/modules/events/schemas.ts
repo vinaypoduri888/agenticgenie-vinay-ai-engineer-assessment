@@ -30,6 +30,8 @@ export const eventsCatalogueQuerySchema = z.object({
   to: z.iso.datetime().optional(),
   category: z.string().trim().min(1).optional(),
   q: z.string().trim().min(1).max(200).optional(),
+  /** In rupees, like a user says it. Prices are stored in paise. */
+  max_price: z.coerce.number().nonnegative().optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   cursor: z.string().min(1).optional(),
 });

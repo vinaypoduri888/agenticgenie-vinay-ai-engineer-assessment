@@ -153,9 +153,12 @@ async function main() {
       description: "An intimate acoustic set.", category: "music", status: "PUBLISHED", startsAt: farFuture(20),
     },
   });
-  await prisma.ticketTier.create({
-    data: { eventId: publishedBangalore.id, name: "General Admission", priceMinor: 45000, totalQuantity: 80, remainingQuantity: 80 },
+  const publishedBangaloreTier = await prisma.ticketTier.create({
+    data: { eventId: publishedBangalore.id, name: "General Admission", priceMinor: 45000, totalQuantity: 10, remainingQuantity: 10 },
   });
+  // The nearly sold-out event: 2 of 10 left.
+  await buyGa(attendees[8]!.id, publishedBangalore.id, publishedBangaloreTier.id, 4);
+  await buyGa(attendees[9]!.id, publishedBangalore.id, publishedBangaloreTier.id, 4);
 
   // --- 5: ON_SALE, GA, with an expired (unswept) hold sitting on it ---
   const onSalePune = await prisma.event.create({
@@ -198,7 +201,7 @@ async function main() {
     await checkout(actionCtx(attendees[1]!.id), randomUUID(), { holdId: hold.body.id }, "success");
   }
 
-  // --- 7-8: SOLD_OUT (nearly), GA ---
+  // --- 7-8: SOLD_OUT, GA. Bought out through real checkouts, which is what flips the status. ---
   const soldOutPune = await prisma.event.create({
     data: {
       organiserId: laughFactory.id, venueId: puneVenue.id, title: "Sell-Out Comedy Gala",
@@ -208,10 +211,9 @@ async function main() {
   const soldOutTier = await prisma.ticketTier.create({
     data: { eventId: soldOutPune.id, name: "General Admission", priceMinor: 80000, totalQuantity: 10, remainingQuantity: 10 },
   });
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 5; i++) {
     await buyGa(attendees[(i + 2) % attendees.length]!.id, soldOutPune.id, soldOutTier.id, 2);
   }
-  await prisma.event.update({ where: { id: soldOutPune.id }, data: { status: "SOLD_OUT" } }); // remaining: 2/10
 
   const soldOutBangalore = await prisma.event.create({
     data: {
@@ -223,7 +225,7 @@ async function main() {
     data: { eventId: soldOutBangalore.id, name: "General Admission", priceMinor: 90000, totalQuantity: 5, remainingQuantity: 5 },
   });
   await buyGa(attendees[6]!.id, soldOutBangalore.id, soldOutTier2.id, 4);
-  await prisma.event.update({ where: { id: soldOutBangalore.id }, data: { status: "SOLD_OUT" } }); // remaining: 1/5
+  await buyGa(attendees[7]!.id, soldOutBangalore.id, soldOutTier2.id, 1);
 
   // --- 9-10: CANCELLED ---
   await prisma.event.create({

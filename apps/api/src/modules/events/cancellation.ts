@@ -93,18 +93,24 @@ async function refundPaidOrdersForCancelledEvent(ctx: ActionContext, eventId: st
 
   let refundedCount = 0;
   for (const order of orders) {
-    await prisma.$transaction(async (tx) => {
-      const validTicketIds = order.tickets.filter((t) => t.status === "VALID").map((t) => t.id);
-      if (validTicketIds.length === 0) return;
-      await performRefund(tx, {
-        order,
-        ticketIds: validTicketIds,
-        reason: "Event cancelled by organiser",
-        requestedByUserId: ctx.actorUserId,
-        requestId: ctx.requestId,
-      });
-    });
-    refundedCount++;
+    const validTicketIds = order.tickets.filter((t) => t.status === "VALID").map((t) => t.id);
+    if (validTicketIds.length === 0) continue;
+    try {
+      await prisma.$transaction((tx) =>
+        performRefund(tx, {
+          order,
+          ticketIds: validTicketIds,
+          reason: "Event cancelled by organiser",
+          requestedByUserId: ctx.actorUserId,
+          requestId: ctx.requestId,
+        }),
+      );
+      refundedCount++;
+    } catch (err) {
+      // A concurrent cancel, or a user's own refund, got to this order first.
+      // That's the outcome we want, and it mustn't stop the remaining refunds.
+      if (!(err instanceof ApiError && err.code === "ALREADY_REFUNDED")) throw err;
+    }
   }
 
   return refundedCount;
@@ -112,9 +118,9 @@ async function refundPaidOrdersForCancelledEvent(ctx: ActionContext, eventId: st
 
 export async function cancelEvent(ctx: ActionContext, eventId: string) {
   const stepA = await cancelEventAndResolveHolds(ctx, eventId);
-  if (stepA.alreadyCancelled) {
-    return { cancelled: true, refundedOrderCount: 0, alreadyCancelled: true };
-  }
+  // Step B always runs, even on a repeat call. If an earlier run died between
+  // the two steps, its unrefunded orders are only reachable from here, and an
+  // order that's already refunded won't be selected again.
   const refundedOrderCount = await refundPaidOrdersForCancelledEvent(ctx, eventId);
-  return { cancelled: true, refundedOrderCount, alreadyCancelled: false };
+  return { cancelled: true, refundedOrderCount, alreadyCancelled: stepA.alreadyCancelled };
 }

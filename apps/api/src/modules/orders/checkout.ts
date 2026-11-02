@@ -6,11 +6,13 @@ import { writeAuditLog } from "../../lib/audit.js";
 import { computeRequestHash } from "../../lib/idempotency.js";
 import { expireHold } from "../holds/sweeper.js";
 import { HOLDABLE_EVENT_STATUSES } from "../holds/service.js";
-import { chargeViaFakeProvider, type PaymentScenario, type ProviderOutcome } from "../payments/fakeProvider.js";
+import { chargeViaFakeProvider, lookupProviderOutcome, type PaymentScenario, type ProviderOutcome } from "../payments/fakeProvider.js";
+import { markSoldOutIfExhausted } from "../events/soldOut.js";
 import type { CreateOrderBody } from "./schemas.js";
 
 const STALE_AFTER_MS = 30_000;
 const ENDPOINT = "POST /orders";
+const UNRESOLVED_PAYMENT_STATUSES = ["PENDING", "TIMED_OUT"] as const;
 
 function isUniqueViolation(err: unknown, constraint?: string): boolean {
   if (!(err instanceof Prisma.PrismaClientKnownRequestError) || err.code !== "P2002") {
@@ -121,6 +123,10 @@ async function runPhase1(ctx: CheckoutContext, holdId: string, idemId: string): 
     throw new ApiError(404, "NOT_FOUND", "Hold not found");
   }
 
+  if (loadedHold.status === "CONVERTED") {
+    throw new ApiError(409, "HOLD_ALREADY_CONVERTED", "This hold has already been purchased");
+  }
+
   // Lazy-expiry check runs in its OWN transaction, deliberately separate
   // from the one below: if the hold IS expired, releasing its inventory
   // must actually commit even though this whole checkout attempt is about
@@ -147,6 +153,9 @@ async function runPhase1(ctx: CheckoutContext, holdId: string, idemId: string): 
     // above necessarily ran in a separate transaction, so re-confirm
     // nothing changed (e.g. the user released it) in the narrow gap between.
     const hold = await tx.hold.findUniqueOrThrow({ where: { id: holdId } });
+    if (hold.status === "CONVERTED") {
+      throw new ApiError(409, "HOLD_ALREADY_CONVERTED", "This hold has already been purchased");
+    }
     if (hold.status !== "ACTIVE") {
       throw new ApiError(409, "HOLD_EXPIRED", "This hold is no longer active");
     }
@@ -157,6 +166,15 @@ async function runPhase1(ctx: CheckoutContext, holdId: string, idemId: string): 
       try {
         order = await tx.order.create({
           data: { userId: ctx.actorUserId, eventId: hold.eventId, holdId, status: "PENDING_PAYMENT", totalAmountMinor },
+        });
+        await writeAuditLog(tx, {
+          actorUserId: ctx.actorUserId,
+          organiserId: event.organiserId,
+          action: "ORDER_CREATED",
+          entityType: "Order",
+          entityId: order.id,
+          afterData: order,
+          requestId: ctx.requestId,
         });
       } catch (err) {
         if (isUniqueViolation(err, "hold_id")) {
@@ -177,6 +195,32 @@ async function runPhase1(ctx: CheckoutContext, holdId: string, idemId: string): 
     // isn't terminal — the hold is still ACTIVE, so the attendee can retry
     // with a new payment attempt against this same order) both fall through
     // to create a fresh Payment row below.
+
+    // One charge at a time per order. The Event row lock above serializes this
+    // check, so two checkouts of one hold under different Idempotency-Keys
+    // can't both reach the provider. A timed-out attempt still counts as in
+    // flight while its key is unresolved: its outcome is unknown, and charging
+    // again would risk a double charge. It settles through a retry with the
+    // same key or through reconciliation.
+    const unresolved = await tx.payment.findMany({
+      where: { orderId: order.id, status: { in: [...UNRESOLVED_PAYMENT_STATUSES] }, externalRef: { not: idemId } },
+      select: { externalRef: true },
+    });
+    if (unresolved.length > 0) {
+      const openClaims = await tx.idempotencyRecord.count({
+        where: { id: { in: unresolved.map((p) => p.externalRef) }, status: "PROCESSING" },
+      });
+      if (openClaims > 0) {
+        throw new ApiError(409, "CHECKOUT_IN_PROGRESS", "A payment for this hold is still being processed");
+      }
+    }
+
+    // A crash can leave this same key's previous attempt PENDING. It is now
+    // superseded, and only one PENDING row per order is allowed.
+    await tx.payment.updateMany({
+      where: { orderId: order.id, status: "PENDING", externalRef: idemId },
+      data: { status: "TIMED_OUT", resolvedAt: new Date() },
+    });
 
     // externalRef = the owning IdempotencyRecord.id, stable across every
     // attempt (including a stale takeover) of this SAME logical checkout —
@@ -282,15 +326,25 @@ async function runPhase3(params: {
     if (params.outcome === "SUCCESS") {
       await tx.payment.update({ where: { id: params.payment.id }, data: { status: "SUCCEEDED", resolvedAt: new Date() } });
 
-      if (!stillSellable) {
-        // Race: the event was cancelled while this checkout's external call
-        // was in flight. The charge is real — refund it immediately rather
-        // than let a cancelled event's order become PAID.
+      // The conditional update is what decides who owns this hold's inventory.
+      // If it matches nothing, the hold was released or expired while the
+      // charge was in flight and its inventory is already back on sale, so
+      // issuing tickets now would oversell.
+      const holdConverted = stillSellable
+        ? (await tx.hold.updateMany({ where: { id: params.hold.id, status: "ACTIVE" }, data: { status: "CONVERTED" } })).count === 1
+        : false;
+
+      if (!holdConverted) {
+        // The charge is real but no inventory backs it, so refund it right
+        // away rather than leave a "maybe paid" order behind.
+        const reason = stillSellable
+          ? "The hold expired or was released while payment was in progress"
+          : "Event was cancelled while payment was in progress";
         const refund = await tx.refund.create({
           data: {
             orderId: params.order.id,
             amountMinor: params.order.totalAmountMinor,
-            reason: "Event was cancelled while payment was in progress",
+            reason,
             requestedByUserId: params.ctx.actorUserId,
           },
         });
@@ -298,20 +352,31 @@ async function runPhase3(params: {
           where: { id: params.order.id },
           data: { status: "REFUNDED", paidByPaymentId: params.payment.id },
         });
-        responseStatus = 200;
-        responseBody = {
-          ...updatedOrder,
-          refundId: refund.id,
-          message: "The event was cancelled during checkout; your payment has been refunded.",
-        };
-        auditAction = "ORDER_AUTO_REFUNDED_EVENT_CANCELLED";
+        if (stillSellable) {
+          responseStatus = 409;
+          responseBody = {
+            ...updatedOrder,
+            refundId: refund.id,
+            message: `${reason}; your payment has been refunded.`,
+            error: { code: "HOLD_EXPIRED", message: `${reason}; your payment has been refunded.`, request_id: params.ctx.requestId },
+          };
+          auditAction = "ORDER_AUTO_REFUNDED_HOLD_LOST";
+        } else {
+          responseStatus = 200;
+          responseBody = {
+            ...updatedOrder,
+            refundId: refund.id,
+            message: "The event was cancelled during checkout; your payment has been refunded.",
+          };
+          auditAction = "ORDER_AUTO_REFUNDED_EVENT_CANCELLED";
+        }
       } else {
-        await tx.hold.updateMany({ where: { id: params.hold.id, status: "ACTIVE" }, data: { status: "CONVERTED" } });
         const tickets = await issueTickets(tx, params.order, params.hold);
         const updatedOrder = await tx.order.update({
           where: { id: params.order.id },
           data: { status: "PAID", paidByPaymentId: params.payment.id },
         });
+        await markSoldOutIfExhausted(tx, params.ctx, params.event.id);
         responseStatus = 201;
         responseBody = { ...updatedOrder, tickets };
         auditAction = "ORDER_PAID";
@@ -343,6 +408,76 @@ async function runPhase3(params: {
   });
 }
 
+/**
+ * Takes a checkout whose outcome was never recorded to a definitive state, from
+ * whatever the provider's ledger says. Reuses Phase 3, so its ownership gate,
+ * the hold check and the auto-refund all apply. A provider with no record of
+ * the charge means nothing was taken, which is a clean decline. Returns
+ * undefined when another attempt resolved it first.
+ */
+async function settleOpenCheckout(idemId: string, requestId: string) {
+  const record = await prisma.idempotencyRecord.findUnique({ where: { id: idemId } });
+  if (!record || record.status !== "PROCESSING") return undefined;
+
+  const payment = await prisma.payment.findFirst({
+    where: { externalRef: idemId },
+    orderBy: { createdAt: "desc" },
+    include: { order: { include: { hold: true, event: true } } },
+  });
+  if (!payment) return undefined;
+
+  const outcome = lookupProviderOutcome(idemId) ?? "DECLINE";
+  try {
+    return await runPhase3({
+      ctx: { actorUserId: payment.order.userId, requestId },
+      idemId,
+      lockToken: record.lockToken,
+      order: payment.order,
+      payment,
+      hold: payment.order.hold,
+      event: payment.order.event,
+      outcome,
+    });
+  } catch (err) {
+    if (err instanceof ApiError && err.code === "REQUEST_SUPERSEDED") return undefined;
+    throw err;
+  }
+}
+
+/**
+ * Finishes checkouts nobody came back for: a timed-out payment whose client
+ * never retried, or a process that died mid-checkout. This is what stops an
+ * order staying "maybe paid". Safe to run concurrently, because Phase 3's
+ * compare-and-swap on the lock token lets only one settler win. Pass a userId
+ * to settle lazily for one user on read.
+ */
+export async function reconcileStuckCheckouts(params?: { userId?: string; olderThanMs?: number }): Promise<number> {
+  const cutoff = new Date(Date.now() - (params?.olderThanMs ?? STALE_AFTER_MS));
+  const stuck = await prisma.idempotencyRecord.findMany({
+    where: {
+      endpoint: ENDPOINT,
+      status: "PROCESSING",
+      updatedAt: { lt: cutoff },
+      ...(params?.userId ? { userId: params.userId } : {}),
+    },
+    select: { id: true, lockToken: true },
+  });
+
+  let settled = 0;
+  for (const record of stuck) {
+    const attempts = await prisma.payment.count({ where: { externalRef: record.id } });
+    if (attempts === 0) {
+      // Rejected before any charge was attempted, so there is nothing to settle.
+      await prisma.idempotencyRecord.deleteMany({ where: { id: record.id, lockToken: record.lockToken, status: "PROCESSING" } });
+      continue;
+    }
+    if (await settleOpenCheckout(record.id, "system-reconcile")) settled++;
+  }
+  return settled;
+}
+
+const SETTLEABLE_PHASE1_REJECTIONS = new Set(["HOLD_EXPIRED", "EVENT_NOT_ON_SALE"]);
+
 export async function checkout(ctx: CheckoutContext, idempotencyKey: string, body: CreateOrderBody, scenario: PaymentScenario) {
   const requestHash = computeRequestHash(body);
   const claim = await claimOrReplay({ userId: ctx.actorUserId, key: idempotencyKey, endpoint: ENDPOINT, requestHash });
@@ -350,7 +485,25 @@ export async function checkout(ctx: CheckoutContext, idempotencyKey: string, bod
     return { status: claim.status, body: claim.body };
   }
 
-  const phase1 = await runPhase1(ctx, body.holdId, claim.idemId);
+  let phase1: Phase1Result;
+  try {
+    phase1 = await runPhase1(ctx, body.holdId, claim.idemId);
+  } catch (err) {
+    const attempts = await prisma.payment.count({ where: { externalRef: claim.idemId } });
+    if (attempts === 0) {
+      // Rejected before any money moved. Drop the claim so replaying this key
+      // gets the same rejection rather than a misleading REQUEST_IN_PROGRESS.
+      await prisma.idempotencyRecord.deleteMany({ where: { id: claim.idemId, lockToken: claim.lockToken, status: "PROCESSING" } });
+    } else if (err instanceof ApiError && SETTLEABLE_PHASE1_REJECTIONS.has(err.code)) {
+      // This key's earlier attempt timed out and the hold or event has since
+      // gone. A provider may still have charged it, so answer with the settled
+      // outcome rather than a bare 409 over money in an unknown state.
+      const settled = await settleOpenCheckout(claim.idemId, ctx.requestId);
+      if (settled) return settled;
+    }
+    throw err;
+  }
+
   if (phase1.alreadyResolved) {
     const record = await prisma.idempotencyRecord.findUnique({ where: { id: claim.idemId } });
     if (record?.status === "COMPLETED") {
@@ -371,9 +524,22 @@ export async function checkout(ctx: CheckoutContext, idempotencyKey: string, bod
     // owned, zero contention). Order stays PENDING_PAYMENT and the
     // IdempotencyRecord stays PROCESSING, untouched — eligible for a later
     // takeover once stale.
-    await prisma.payment.updateMany({
-      where: { id: phase1.payment.id, status: "PENDING" },
-      data: { status: "TIMED_OUT", resolvedAt: new Date() },
+    await prisma.$transaction(async (tx) => {
+      const updated = await tx.payment.updateMany({
+        where: { id: phase1.payment.id, status: "PENDING" },
+        data: { status: "TIMED_OUT", resolvedAt: new Date() },
+      });
+      if (updated.count === 0) return;
+      await writeAuditLog(tx, {
+        actorUserId: ctx.actorUserId,
+        organiserId: phase1.event.organiserId,
+        action: "PAYMENT_TIMED_OUT",
+        entityType: "Order",
+        entityId: phase1.order.id,
+        beforeData: { paymentStatus: "PENDING" },
+        afterData: { paymentStatus: "TIMED_OUT", paymentId: phase1.payment.id },
+        requestId: ctx.requestId,
+      });
     });
     return {
       status: 202,

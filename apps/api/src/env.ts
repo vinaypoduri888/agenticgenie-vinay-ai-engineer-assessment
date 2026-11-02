@@ -10,6 +10,27 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default("12h"),
   BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(4).max(15).default(10),
   HOLD_EXPIRY_MINUTES: z.coerce.number().int().min(1).max(60).default(10),
+  // How often the server sweeps expired holds and settles stuck checkouts.
+  // 0 turns the timer off (lazy expiry on read still applies).
+  SWEEP_INTERVAL_SECONDS: z.coerce.number().int().min(0).default(30),
+  // The fake payment provider's outcome when a request doesn't pick one with
+  // X-Payment-Scenario. Also what the agent's purchase tool gets.
+  FAKE_PAYMENT_SCENARIO: z.enum(["success", "decline", "timeout_then_success", "timeout_then_decline"]).default("success"),
+
+  // --- Part B: AI agent provider (Stage B1 — fields only, nothing reads
+  // these yet; Stage B2 constructs the real provider from them). Default
+  // "mock" means the app never requires a paid API key to run.
+  AI_PROVIDER: z.enum(["mock", "nemotron"]).default("mock"),
+  NEMOTRON_BASE_URL: z.string().optional(),
+  NEMOTRON_API_KEY: z.string().optional(),
+  NEMOTRON_MODEL: z.string().optional(),
+  NEMOTRON_TIMEOUT_MS: z.coerce.number().int().positive().default(30_000),
+
+  // Per-turn agent budgets. Every limit here is enforced by the loop, not by
+  // anything the model is told.
+  AGENT_MAX_STEPS: z.coerce.number().int().min(1).max(20).default(6),
+  AGENT_TOKEN_BUDGET: z.coerce.number().int().positive().default(24_000),
+  AGENT_TOOL_TIMEOUT_MS: z.coerce.number().int().positive().default(10_000),
 });
 
 export type Env = z.infer<typeof envSchema>;

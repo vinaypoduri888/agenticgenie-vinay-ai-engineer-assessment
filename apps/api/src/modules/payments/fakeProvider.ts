@@ -46,6 +46,13 @@ export async function chargeViaFakeProvider(params: {
   }
 }
 
+/** What the provider recorded for this reference, without charging anything.
+ * `undefined` means it never saw the charge. This is the status lookup a real
+ * provider's API would offer, and what reconciliation settles from. */
+export function lookupProviderOutcome(externalRef: string): "SUCCESS" | "DECLINE" | undefined {
+  return ledger.get(externalRef);
+}
+
 /** Refunds are synchronous in this model (no simulated timeout — see
  * D-012); still keyed and deduped the same way so a retried refund call
  * for the same refundRef never double-refunds at the "provider" level. */

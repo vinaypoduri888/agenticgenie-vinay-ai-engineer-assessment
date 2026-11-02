@@ -6,6 +6,7 @@ import { decodeCursor, encodeCursor } from "../../lib/pagination.js";
 import type { ActionContext } from "../../lib/actionContext.js";
 import { requireVenue } from "../venues/service.js";
 import { canTransitionEventStatus } from "./statusTransitions.js";
+import { sweepExpiredHoldsForEvent } from "../holds/sweeper.js";
 import type { CreateEventBody, EventsCatalogueQuery, UpdateEventBody } from "./schemas.js";
 
 /** DRAFT is never shown anywhere outside the owning organiser. Catalogue
@@ -55,7 +56,11 @@ async function seatAvailabilitySummary(eventId: string) {
 async function buildEventDetail(eventId: string) {
   const event = await prisma.event.findUniqueOrThrow({
     where: { id: eventId },
-    include: { venue: true, tiers: { orderBy: { createdAt: "asc" } } },
+    include: {
+      venue: true,
+      tiers: { orderBy: { createdAt: "asc" } },
+      organiser: { select: { id: true, name: true } },
+    },
   });
   const seatSummary = await seatAvailabilitySummary(eventId);
   return { ...event, seatAvailability: seatSummary };
@@ -99,10 +104,30 @@ export async function getEventForOrganiser(organiserId: string, eventId: string)
  * any organiser-side "my events" UI — without it there's no way to
  * discover an organiser's own event ids at all. A small, obvious extension. */
 export async function listEventsForOrganiser(organiserId: string) {
-  return prisma.event.findMany({
+  const events = await prisma.event.findMany({
     where: { organiserId },
-    orderBy: [{ createdAt: "desc" }],
-    include: { venue: { select: { name: true, city: true } } },
+    orderBy: [{ startsAt: "asc" }, { id: "asc" }],
+    include: { venue: { select: { name: true, city: true } }, tiers: { select: { totalQuantity: true, remainingQuantity: true } } },
+  });
+  const [seats, sold] = await Promise.all([
+    prisma.eventSeat.groupBy({
+      by: ["eventId", "status"],
+      where: { eventId: { in: events.map((e) => e.id) } },
+      _count: { _all: true },
+    }),
+    prisma.ticket.groupBy({
+      by: ["eventId"],
+      where: { eventId: { in: events.map((e) => e.id) }, status: "VALID" },
+      _count: { _all: true },
+    }),
+  ]);
+  return events.map(({ tiers, ...event }) => {
+    const eventSeats = seats.filter((s) => s.eventId === event.id);
+    return {
+      ...event,
+      capacity: tiers.reduce((sum, t) => sum + t.totalQuantity, 0) + eventSeats.reduce((sum, s) => sum + s._count._all, 0),
+      ticketsSold: sold.find((s) => s.eventId === event.id)?._count._all ?? 0,
+    };
   });
 }
 
@@ -161,20 +186,45 @@ export async function publishEvent(ctx: ActionContext, eventId: string) {
     );
   }
 
+  return applyStatusChange(ctx, eventId, existing.status, "PUBLISHED", "EVENT_PUBLISHED");
+}
+
+/** The status check and the write are one conditional update, so a change that
+ * races with a cancellation can't overwrite it. */
+async function applyStatusChange(ctx: ActionContext, eventId: string, from: EventStatus, to: EventStatus, action: string) {
   return prisma.$transaction(async (tx) => {
-    const updated = await tx.event.update({ where: { id: eventId }, data: { status: "PUBLISHED" } });
+    const changed = await tx.event.updateMany({ where: { id: eventId, status: from }, data: { status: to } });
+    if (changed.count === 0) {
+      throw new ApiError(409, "INVALID_STATUS_TRANSITION", "The event's status changed before this could be applied");
+    }
     await writeAuditLog(tx, {
       actorUserId: ctx.actorUserId,
       organiserId: ctx.organiserId,
-      action: "EVENT_PUBLISHED",
+      action,
       entityType: "Event",
       entityId: eventId,
-      beforeData: { status: existing.status },
-      afterData: { status: updated.status },
+      beforeData: { status: from },
+      afterData: { status: to },
       requestId: ctx.requestId,
     });
-    return updated;
+    return tx.event.findUniqueOrThrow({ where: { id: eventId } });
   });
+}
+
+export async function putEventOnSale(ctx: ActionContext, eventId: string) {
+  const existing = await requireOrganiserEvent(ctx.organiserId, eventId);
+  if (!canTransitionEventStatus(existing.status, "ON_SALE")) {
+    throw new ApiError(409, "INVALID_STATUS_TRANSITION", `Cannot put an event in status ${existing.status} on sale`);
+  }
+  return applyStatusChange(ctx, eventId, existing.status, "ON_SALE", "EVENT_ON_SALE");
+}
+
+export async function completeEvent(ctx: ActionContext, eventId: string) {
+  const existing = await requireOrganiserEvent(ctx.organiserId, eventId);
+  if (!canTransitionEventStatus(existing.status, "COMPLETED")) {
+    throw new ApiError(409, "INVALID_STATUS_TRANSITION", `Cannot complete an event in status ${existing.status}`);
+  }
+  return applyStatusChange(ctx, eventId, existing.status, "COMPLETED", "EVENT_COMPLETED");
 }
 
 export async function listPublicEvents(query: EventsCatalogueQuery) {
@@ -196,6 +246,15 @@ export async function listPublicEvents(query: EventsCatalogueQuery) {
         ...(query.from ? { gte: new Date(query.from) } : {}),
         ...(query.to ? { lte: new Date(query.to) } : {}),
       },
+    });
+  }
+  if (query.max_price !== undefined) {
+    const maxMinor = Math.round(query.max_price * 100);
+    conditions.push({
+      OR: [
+        { tiers: { some: { priceMinor: { lte: maxMinor } } } },
+        { eventSeats: { some: { priceMinor: { lte: maxMinor } } } },
+      ],
     });
   }
   if (query.q) {
@@ -227,9 +286,22 @@ export async function listPublicEvents(query: EventsCatalogueQuery) {
   const hasMore = events.length > query.limit;
   const page = hasMore ? events.slice(0, query.limit) : events;
 
+  const seatStats = await prisma.eventSeat.groupBy({
+    by: ["eventId", "status"],
+    where: { eventId: { in: page.map((e) => e.id) } },
+    _count: { _all: true },
+    _min: { priceMinor: true },
+  });
+
   const items = page.map((event) => {
-    const prices = event.tiers.map((t) => t.priceMinor);
+    const seats = seatStats.filter((s) => s.eventId === event.id);
+    const prices = [...event.tiers.map((t) => t.priceMinor), ...seats.flatMap((s) => (s._min.priceMinor === null ? [] : [s._min.priceMinor]))];
     const minPriceMinor = prices.length > 0 ? Math.min(...prices) : null;
+    const remaining =
+      event.tiers.reduce((sum, t) => sum + t.remainingQuantity, 0) +
+      seats.filter((s) => s.status === "AVAILABLE").reduce((sum, s) => sum + s._count._all, 0);
+    const total =
+      event.tiers.reduce((sum, t) => sum + t.totalQuantity, 0) + seats.reduce((sum, s) => sum + s._count._all, 0);
     return {
       id: event.id,
       title: event.title,
@@ -238,6 +310,7 @@ export async function listPublicEvents(query: EventsCatalogueQuery) {
       startsAt: event.startsAt,
       venue: event.venue,
       minPriceMinor,
+      availability: { remaining, total },
     };
   });
 
@@ -252,6 +325,9 @@ export async function getPublicEventDetail(eventId: string) {
   if (!event || !DIRECT_VISIBLE_STATUSES.includes(event.status)) {
     throw new ApiError(404, "NOT_FOUND", "Event not found");
   }
+  // Lazy expiry on read, so the availability shown is never overstated by a
+  // hold that has lapsed but hasn't been swept yet.
+  await sweepExpiredHoldsForEvent(eventId);
   return buildEventDetail(eventId);
 }
 
@@ -266,6 +342,8 @@ export async function listEventSeats(eventId: string) {
     throw new ApiError(404, "NOT_FOUND", "Event not found");
   }
 
+  await sweepExpiredHoldsForEvent(eventId);
+
   const seats = await prisma.eventSeat.findMany({
     where: { eventId },
     include: { seat: { include: { row: { include: { section: true } } } } },
@@ -273,7 +351,11 @@ export async function listEventSeats(eventId: string) {
   });
 
   return seats.map((es) => ({
-    id: es.id,
+    // `id` is the value POST /holds takes in seat_ids (the physical seat).
+    // Returning the EventSeat row id here made every seated hold from this
+    // listing fail with SEAT_UNAVAILABLE.
+    id: es.seatId,
+    eventSeatId: es.id,
     status: es.status,
     priceMinor: es.priceMinor,
     section: es.seat.row.section.name,

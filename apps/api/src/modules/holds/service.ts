@@ -174,6 +174,22 @@ export async function releaseHold(ctx: HoldActionContext, holdId: string) {
     return { released: true }; // DELETE is idempotent: already resolved is a success, not an error
   }
 
+  // Refuse while a charge is in flight, so the user isn't refunded by surprise.
+  // Correctness doesn't depend on this check: if a release slips in anyway,
+  // checkout's conditional hold update fails and it refunds.
+  const order = await prisma.order.findUnique({
+    where: { holdId },
+    select: { status: true, payments: { where: { status: { in: ["PENDING", "TIMED_OUT"] } }, select: { externalRef: true } } },
+  });
+  if (order?.status === "PENDING_PAYMENT" && order.payments.length > 0) {
+    const openClaims = await prisma.idempotencyRecord.count({
+      where: { id: { in: order.payments.map((p) => p.externalRef) }, status: "PROCESSING" },
+    });
+    if (openClaims > 0) {
+      throw new ApiError(409, "CHECKOUT_IN_PROGRESS", "A payment for this hold is still being processed");
+    }
+  }
+
   return prisma.$transaction(async (tx) => {
     const resolved = await tx.hold.updateMany({
       where: { id: holdId, status: "ACTIVE" },
@@ -223,4 +239,34 @@ export async function getUsableHoldOrThrow(holdId: string, userId: string) {
     throw new ApiError(409, "HOLD_EXPIRED", "This hold has expired");
   }
   return hold;
+}
+
+/** The caller's own live holds, with what they cover. Without this, reloading a
+ * page mid-checkout strands the user: their hold still exists, and the
+ * one-active-hold rule refuses a new one until it expires. */
+export async function listMyActiveHolds(userId: string, eventId?: string) {
+  if (eventId) await sweepExpiredHoldsForEvent(eventId);
+  const holds = await prisma.hold.findMany({
+    where: { userId, status: "ACTIVE", expiresAt: { gt: new Date() }, ...(eventId ? { eventId } : {}) },
+    include: {
+      gaTicketTier: { select: { name: true, priceMinor: true } },
+      eventSeats: { include: { seat: { include: { row: { include: { section: true } } } } } },
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return holds.map((hold) => ({
+    id: hold.id,
+    eventId: hold.eventId,
+    kind: hold.kind,
+    expiresAt: hold.expiresAt,
+    quantity: hold.kind === "GA" ? hold.gaQuantity! : hold.eventSeats.length,
+    totalMinor:
+      hold.kind === "GA"
+        ? hold.gaTicketTier!.priceMinor * hold.gaQuantity!
+        : hold.eventSeats.reduce((sum, seat) => sum + seat.priceMinor, 0),
+    label:
+      hold.kind === "GA"
+        ? hold.gaTicketTier!.name
+        : hold.eventSeats.map((s) => `${s.seat.row.section.name} Row ${s.seat.row.label} Seat ${s.seat.label}`).join(", "),
+  }));
 }

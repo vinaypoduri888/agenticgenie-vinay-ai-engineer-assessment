@@ -37,7 +37,7 @@ export async function getSalesSummary(organiserId: string, query: SalesReportQue
     `;
   } else if (query.group_by === "tier") {
     rows = await prisma.$queryRaw<RawRow[]>`
-      SELECT t.ticket_tier_id AS key, tt.name AS label,
+      SELECT COALESCE(t.ticket_tier_id, 'seated') AS key, COALESCE(tt.name, 'Reserved seating') AS label,
              SUM(t.price_minor) AS revenue_minor, COUNT(*) AS ticket_count
       FROM tickets t
       JOIN orders o ON o.id = t.order_id

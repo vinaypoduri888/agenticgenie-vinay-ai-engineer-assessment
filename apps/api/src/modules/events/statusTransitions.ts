@@ -2,15 +2,14 @@ import type { EventStatus } from "@prisma/client";
 
 /**
  * draft → published → on_sale → sold_out | cancelled | completed, per the
- * PDF's status diagram. Only DRAFT→PUBLISHED is exposed over HTTP in this
- * stage (the `publish` action) — the rest of the table exists now so later
- * stages (going on sale, selling out, completing, and cancellation/refund)
- * call an already-defined, already-tested transition rule instead of
- * re-deriving one under time pressure. CANCELLED/COMPLETED are terminal.
+ * PDF's status diagram. Publish, on-sale, complete and cancel are organiser
+ * actions over HTTP. SOLD_OUT is derived from inventory (see soldOut.ts), and
+ * a PUBLISHED event can already be sold, so it can sell out or complete
+ * directly. CANCELLED/COMPLETED are terminal.
  */
 const ALLOWED_TRANSITIONS: Record<EventStatus, EventStatus[]> = {
   DRAFT: ["PUBLISHED", "CANCELLED"],
-  PUBLISHED: ["ON_SALE", "CANCELLED"],
+  PUBLISHED: ["ON_SALE", "SOLD_OUT", "CANCELLED", "COMPLETED"],
   ON_SALE: ["SOLD_OUT", "CANCELLED", "COMPLETED"],
   SOLD_OUT: ["ON_SALE", "CANCELLED", "COMPLETED"],
   CANCELLED: [],

@@ -5,6 +5,7 @@ import { writeAuditLog } from "../../lib/audit.js";
 import { withIdempotency } from "../../lib/idempotency.js";
 import { canRefundOrder } from "../auth/policies.js";
 import { INVENTORY_RELEASE_BLOCKED_STATUSES } from "../events/service.js";
+import { reopenIfSoldOut } from "../events/soldOut.js";
 import { refundViaFakeProvider } from "../payments/fakeProvider.js";
 import type { RequestRefundBody } from "./schemas.js";
 
@@ -34,6 +35,7 @@ export async function performRefund(
   },
 ) {
   let refundedAmount = 0;
+  let inventoryReturned = false;
   const refundedTicketIds: string[] = [];
 
   for (const ticketId of params.ticketIds) {
@@ -56,6 +58,7 @@ export async function performRefund(
     // doesn't make sense. Neither does releasing inventory for an event
     // that's CANCELLED or COMPLETED — there's no one left to sell it to.
     if (!ticket.checkedInAt && !INVENTORY_RELEASE_BLOCKED_STATUSES.includes(params.order.event.status)) {
+      inventoryReturned = true;
       if (ticket.eventSeatId) {
         await tx.eventSeat.updateMany({
           where: { id: ticket.eventSeatId, status: "SOLD" },
@@ -72,6 +75,10 @@ export async function performRefund(
 
   if (refundedTicketIds.length === 0) {
     throw new ApiError(409, "ALREADY_REFUNDED", "The specified tickets have already been refunded");
+  }
+
+  if (inventoryReturned) {
+    await reopenIfSoldOut(tx, { actorUserId: params.requestedByUserId, requestId: params.requestId }, params.order.eventId);
   }
 
   const refund = await tx.refund.create({
@@ -107,6 +114,32 @@ export async function performRefund(
   return { refund, order: updatedOrder };
 }
 
+/**
+ * Who may refund this order, as one decision used by both the REST endpoint and
+ * the agent's cancel_order tool. An order the caller has no relationship to is
+ * a 404, so its existence isn't confirmed.
+ */
+export async function assertCanRefund(tx: Prisma.TransactionClient, order: Order & { event: Event }, actorUserId: string) {
+  const isOwnOrder = order.userId === actorUserId;
+  const membership = await tx.organiserMembership.findUnique({
+    where: { organiserId_userId: { organiserId: order.event.organiserId, userId: actorUserId } },
+  });
+
+  if (!membership) {
+    if (!isOwnOrder) {
+      throw new ApiError(404, "NOT_FOUND", "Order not found");
+    }
+    // Pure attendee self-service cancellation is bound by the event's refund
+    // window. Staff/admin refunds are discretionary organiser actions and aren't.
+    const deadline = new Date(order.event.startsAt.getTime() - order.event.refundWindowHours * 3_600_000);
+    if (new Date() > deadline) {
+      throw new ApiError(409, "REFUND_WINDOW_CLOSED", "The refund window for this event has closed");
+    }
+  } else if (!canRefundOrder({ actorRole: membership.role, isOwnOrder })) {
+    throw new ApiError(403, "FORBIDDEN", "Staff cannot refund their own order");
+  }
+}
+
 export async function requestRefund(
   ctx: RefundActionContext,
   idempotencyKey: string,
@@ -114,33 +147,17 @@ export async function requestRefund(
   body: RequestRefundBody,
 ) {
   return withIdempotency(
-    { userId: ctx.actorUserId, key: idempotencyKey, endpoint: "POST /orders/:id/refund", requestBody: body },
+    // orderId is part of the hash: the endpoint string is the route pattern, so
+    // without it, reusing a key on a different order would replay the first
+    // order's refund and silently leave the second order unrefunded.
+    { userId: ctx.actorUserId, key: idempotencyKey, endpoint: "POST /orders/:id/refund", requestBody: { orderId, ...body } },
     async (tx) => {
       const order = await tx.order.findUnique({ where: { id: orderId }, include: { tickets: true, event: true } });
       if (!order) {
         throw new ApiError(404, "NOT_FOUND", "Order not found");
       }
 
-      const isOwnOrder = order.userId === ctx.actorUserId;
-      const membership = await tx.organiserMembership.findUnique({
-        where: { organiserId_userId: { organiserId: order.event.organiserId, userId: ctx.actorUserId } },
-      });
-
-      if (!membership) {
-        if (!isOwnOrder) {
-          // Cross-user probe on someone else's order — hide existence.
-          throw new ApiError(404, "NOT_FOUND", "Order not found");
-        }
-        // Pure attendee self-service cancellation — bound by the event's
-        // refund window. Staff/admin refunds (below) are discretionary
-        // organiser actions and are not window-bound.
-        const deadline = new Date(order.event.startsAt.getTime() - order.event.refundWindowHours * 3_600_000);
-        if (new Date() > deadline) {
-          throw new ApiError(409, "REFUND_WINDOW_CLOSED", "The refund window for this event has closed");
-        }
-      } else if (!canRefundOrder({ actorRole: membership.role, isOwnOrder })) {
-        throw new ApiError(403, "FORBIDDEN", "Staff cannot refund their own order");
-      }
+      await assertCanRefund(tx, order, ctx.actorUserId);
 
       if (order.status !== "PAID" && order.status !== "PARTIALLY_REFUNDED") {
         throw new ApiError(409, "ORDER_NOT_REFUNDABLE", `Order in status ${order.status} cannot be refunded`);

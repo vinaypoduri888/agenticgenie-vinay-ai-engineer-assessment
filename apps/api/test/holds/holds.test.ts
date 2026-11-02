@@ -229,6 +229,9 @@ describe("hold expiry", () => {
 
     // Simulate time passing — directly backdate expiresAt (a fake clock for
     // this one row) rather than waiting out the real 10-minute default.
+    // The sweep is platform-wide and the demo seed deliberately leaves an expired
+    // hold behind, so clear anything already lapsed before counting this one.
+    await sweepAllExpiredHolds();
     await prisma.hold.update({ where: { id: created.body.id }, data: { expiresAt: new Date(Date.now() - 1000) } });
 
     const firstSweep = await sweepAllExpiredHolds();
@@ -390,7 +393,7 @@ describe("hold idempotency", () => {
       .set("Authorization", authFor(user.id))
       .send({ eventId: event.id, tierId: tier.id, quantity: 1 });
 
-    expect(response.status).toBe(400);
-    expect(response.body.error.code).toBe("IDEMPOTENCY_KEY_REQUIRED");
+    // Optional on holds per the API contract; required on orders and refunds.
+    expect(response.status).toBe(201);
   });
 });
